@@ -1,6 +1,7 @@
 package com.github.bitstuffing.webvideocaster
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
 import com.github.bitstuffing.webvideocaster.runtime.CastConnectionManager
 import com.github.bitstuffing.webvideocaster.utils.CastSession
 import com.github.bitstuffing.webvideocaster.utils.CastUtils
@@ -18,7 +19,9 @@ class CastConnectionManagerTest {
     @Test
     fun playPauseSameSocket_doesNotCrash() = runBlocking {
 
-        val device = CastUtils.searchDevices().firstOrNull()
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+
+        val device = CastUtils.searchDevices(context).firstOrNull()
         assertNotNull("No Chromecast found", device)
 
         var session: CastSession? = null

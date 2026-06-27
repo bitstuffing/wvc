@@ -180,7 +180,7 @@ fun MainScreen() {
                                 scope.launch {
                                     val lock = CastUtils.acquireMulticastLock(context)
                                     try {
-                                        devices = CastUtils.searchDevices()
+                                        devices = CastUtils.searchDevices(context)
                                     } finally {
                                         lock.release()
                                         isSearching = false

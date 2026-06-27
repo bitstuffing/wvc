@@ -1,9 +1,13 @@
 package com.github.bitstuffing.webvideocaster.utils
 
+import android.annotation.SuppressLint
 import android.content.Context
+import android.net.nsd.NsdManager
+import android.net.nsd.NsdServiceInfo
 import android.net.wifi.WifiManager
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.xml.sax.InputSource
 import java.io.BufferedOutputStream
@@ -52,71 +56,79 @@ object CastUtils {
     // =========================
     // DISCOVERY
     // =========================
-    suspend fun searchDevices(timeoutMs: Long = 3000L): List<CastDevice> {
-        return withContext(Dispatchers.IO) {
-            val devices = linkedMapOf<String, CastDevice>()
+    @SuppressLint("MissingPermission")
+    private suspend fun ssdpDiscover(context: Context, timeoutMs: Long): List<CastDevice> =
+        withContext(Dispatchers.IO) {
+            val nsdManager = context.getSystemService(Context.NSD_SERVICE) as NsdManager
+            val found = linkedMapOf<String, CastDevice>()
 
-            val found = ssdpDiscover(timeoutMs)
-            for (device in found) {
-                devices[device.ip] = device
-            }
+            val listener = object : NsdManager.DiscoveryListener {
+                override fun onDiscoveryStarted(regType: String) {
+                    Log.d("CAST_TEST", "Discovery started: $regType")
+                }
 
-            devices.values.sortedBy { it.friendlyName.lowercase() }
-        }
-    }
+                override fun onServiceFound(service: NsdServiceInfo) {
+                    if (service.serviceType != "_googlecast._tcp.") return
 
-    private fun ssdpDiscover(timeoutMs: Long): List<CastDevice> {
-        val found = mutableListOf<CastDevice>()
+                    nsdManager.resolveService(service, object : NsdManager.ResolveListener {
+                        override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
+                            Log.e("CAST_TEST", "Resolve failed: $serviceInfo error=$errorCode")
+                        }
 
-        val socket = DatagramSocket().apply {
-            reuseAddress = true
-            soTimeout = timeoutMs.toInt()
-        }
+                        override fun onServiceResolved(serviceInfo: NsdServiceInfo) {
+                            val host = serviceInfo.host?.hostAddress ?: return
 
-        try {
-            val request = buildString {
-                append("M-SEARCH * HTTP/1.1\r\n")
-                append("HOST: $SSDP_ADDR:$SSDP_PORT\r\n")
-                append("MAN: \"ssdp:discover\"\r\n")
-                append("MX: 1\r\n")
-                append("ST: urn:dial-multiscreen-org:service:dial:1\r\n")
-                append("\r\n")
-            }.toByteArray(Charsets.UTF_8)
+                            val device = fetchDeviceDesc(host)?.copy(
+                                ip = host
+                            ) ?: CastDevice(
+                                friendlyName = serviceInfo.serviceName,
+                                ip = host
+                            )
 
-            socket.send(
-                DatagramPacket(
-                    request,
-                    request.size,
-                    InetSocketAddress(InetAddress.getByName(SSDP_ADDR), SSDP_PORT)
-                )
-            )
+                            found[host] = device
+                            Log.d("CAST_TEST", "Device added: ${device.friendlyName} / ${device.ip}")
+                        }
+                    })
+                }
 
-            val buffer = ByteArray(8192)
-            val start = System.currentTimeMillis()
+                override fun onServiceLost(service: NsdServiceInfo) {
+                    Log.d("CAST_TEST", "Service lost: $service")
+                }
 
-            while (System.currentTimeMillis() - start < timeoutMs) {
-                try {
-                    val packet = DatagramPacket(buffer, buffer.size)
-                    socket.receive(packet)
+                override fun onDiscoveryStopped(serviceType: String) {
+                    Log.d("CAST_TEST", "Discovery stopped: $serviceType")
+                }
 
-                    val raw = String(packet.data, packet.offset, packet.length)
+                override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {
+                    Log.e("CAST_TEST", "Start discovery failed: $serviceType error=$errorCode")
+                }
 
-                    val headers = parseHttpHeaders(raw)
-                    val location = headers["location"] ?: continue
-                    val ip = runCatching { URL(location).host }.getOrNull() ?: continue
-
-                    fetchDeviceDesc(ip)?.let { found.add(it) }
-
-                } catch (_: Exception) {
-                    break
+                override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {
+                    Log.e("CAST_TEST", "Stop discovery failed: $serviceType error=$errorCode")
                 }
             }
-        } finally {
-            socket.close()
+
+            try {
+                nsdManager.discoverServices(
+                    "_googlecast._tcp.",
+                    NsdManager.PROTOCOL_DNS_SD,
+                    listener
+                )
+
+                delay(timeoutMs)
+            } catch (e: Exception) {
+                Log.e("CAST_TEST", "MDNS discover failed", e)
+            } finally {
+                runCatching { nsdManager.stopServiceDiscovery(listener) }
+            }
+
+            found.values.sortedBy { it.friendlyName.lowercase() }
         }
 
-        return found
+    suspend fun searchDevices(context: Context, timeoutMs: Long = 10000L): List<CastDevice> {
+        return ssdpDiscover(context, timeoutMs)
     }
+
 
     private fun fetchDeviceDesc(ip: String): CastDevice? {
         val ports = listOf(8008, 8009)

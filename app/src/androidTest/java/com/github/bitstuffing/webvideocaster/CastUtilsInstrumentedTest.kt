@@ -26,7 +26,7 @@ class CastUtilsInstrumentedTest {
         try {
             Log.d("CAST_TEST", "MulticastLock locked")
 
-            val devices = CastUtils.searchDevices()
+            val devices = CastUtils.searchDevices(context)
 
             Log.d("CAST_TEST", "Devices found: ${devices.size}")
             devices.forEach { device ->
@@ -37,6 +37,7 @@ class CastUtilsInstrumentedTest {
             Log.d("CAST_TEST", "Free MulticastLock")
         }
     }
+
 
     @Test
     fun castUrl_doesNotCrash() = runBlocking {
@@ -50,7 +51,7 @@ class CastUtilsInstrumentedTest {
 
         try {
 
-            val devices = CastUtils.searchDevices()
+            val devices = CastUtils.searchDevices(context)
             val device = devices.firstOrNull()
 
             assertNotNull("No available cast devices", device)
@@ -103,7 +104,7 @@ class CastUtilsInstrumentedTest {
         val lock = CastUtils.acquireMulticastLock(context)
 
         try {
-            val devices = CastUtils.searchDevices()
+            val devices = CastUtils.searchDevices(context)
             val device = devices.firstOrNull()
 
             assertNotNull("No cast devices found", device)
