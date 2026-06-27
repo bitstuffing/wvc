@@ -1,0 +1,22 @@
+<resources>
+    <string name="app_name">Web Video Caster</string>
+    <string name="videos_detected">🎥 Vídeos detectados</string>
+    <string name="clean_history">Limpiar historial</string>
+    <string name="no_videos_yet">No hay vídeos aún</string>
+    <string name="videos">Vídeos</string>
+    <string name="cast">Transmitir</string>
+    <string name="go">Ir</string>
+    <string name="video_detected">🎥 Vídeo detectado</string>
+    <string name="cast_menu">📺 Transmitir</string>
+    <string name="no_device_selected">Ningún dispositivo seleccionado</string>
+    <string name="vlc_menu">📺 VLC</string>
+    <string name="copy_menu">📋 Copiar</string>
+    <string name="cast_devices">Dispositivos de transmisión</string>
+    <string name="searching_devices">Buscando dispositivos&#8230;</string>
+    <string name="no_devices_found">No se encontraron dispositivos</string>
+    <string name="chromecast_help">Asegúrate de que tu Chromecast esté en la misma red Wi&#8211;Fi.</string>
+    <string name="close">Cerrar</string>
+    <string name="searching_chromecast">Buscando Chromecast&#8230;</string>
+    <string name="chromecast_remote">Control remoto de Chromecast</string>
+    <string name="vlc_not_installed">VLC no instalado o no compatible</string>
+</resources>

@@ -20,8 +20,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import com.github.bitstuffing.webvideocaster.R
 import com.github.bitstuffing.webvideocaster.utils.*
 import kotlinx.coroutines.launch
 
@@ -93,7 +95,7 @@ fun MainScreen() {
                 ) {
 
                     Text(
-                        "🎥 Videos detected",
+                        stringResource(R.string.videos_detected),
                         style = MaterialTheme.typography.titleMedium
                     )
 
@@ -106,14 +108,14 @@ fun MainScreen() {
                     ) {
                         Icon(
                             imageVector = Icons.Filled.Delete,
-                            contentDescription = "Clean history"
+                            contentDescription = stringResource(R.string.clean_history)
                         )
                     }
                 }
 
                 if (detectedVideos.isEmpty()) {
                     Text(
-                        "No hay vídeos aún",
+                        stringResource(R.string.no_videos_yet),
                         modifier = Modifier.padding(12.dp)
                     )
                 } else {
@@ -159,7 +161,7 @@ fun MainScreen() {
 
                 TopAppBar(
 
-                    title = { Text("Web Video Caster") },
+                    title = { Text(stringResource(R.string.app_name)) },
 
                     actions = {
 
@@ -171,7 +173,7 @@ fun MainScreen() {
                                 }
                             }
                         ) {
-                            Icon(Icons.Filled.List, "Videos")
+                            Icon(Icons.Filled.List, stringResource(R.string.videos))
                         }
 
                         IconButton(
@@ -194,7 +196,7 @@ fun MainScreen() {
                             Icon(
                                 if (connected) Icons.Filled.CastConnected
                                 else Icons.Filled.Cast,
-                                contentDescription = "Cast",
+                                contentDescription = stringResource(R.string.cast),
                                 tint = if (connected) Color(0xFF4CAF50)
                                 else LocalContentColor.current
                             )
@@ -249,7 +251,7 @@ fun MainScreen() {
                             webView?.loadUrl(finalUrl)
                         }
                     ) {
-                        Text("Ir")
+                        Text(stringResource(R.string.go))
                     }
                 }
 
@@ -335,8 +337,8 @@ fun MainScreen() {
                                         activity.runOnUiThread {
                                             addVideo(url)
                                             Toast.makeText(
-                                                context,
-                                                "🎥 Video detected",
+                                                activity,
+                                                activity.getString(R.string.video_detected),
                                                 Toast.LENGTH_SHORT
                                             ).show()
                                         }
@@ -391,7 +393,7 @@ fun MainScreen() {
         selectedVideo?.let { url ->
 
             DropdownMenuItem(
-                text = { Text("📺 Cast") },
+                text = { Text(stringResource(R.string.cast_menu)) },
                 onClick = {
                     showVideoMenu = false
 
@@ -400,13 +402,13 @@ fun MainScreen() {
                             session = it
                         }
                     } ?: run {
-                        Toast.makeText(context, "No device selected", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, context.getString(R.string.no_device_selected), Toast.LENGTH_SHORT).show()
                     }
                 }
             )
 
             DropdownMenuItem(
-                text = { Text("📺 VLC") },
+                text = { Text(stringResource(R.string.vlc_menu)) },
                 onClick = {
                     showVideoMenu = false
                     openWithVlc(context, url)
@@ -414,7 +416,7 @@ fun MainScreen() {
             )
 
             DropdownMenuItem(
-                text = { Text("📋 Copy") },
+                text = { Text(stringResource(R.string.copy_menu)) },
                 onClick = {
                     showVideoMenu = false
 
@@ -442,7 +444,7 @@ fun MainScreen() {
                     .padding(horizontal = 16.dp, vertical = 8.dp)
             ) {
                 Text(
-                    text = "Cast devices",
+                    text = stringResource(R.string.cast_devices),
                     style = MaterialTheme.typography.headlineSmall
                 )
 
@@ -456,12 +458,12 @@ fun MainScreen() {
                             .clip(RoundedCornerShape(999.dp))
                     )
                     Spacer(modifier = Modifier.height(16.dp))
-                    Text("Searching for devices...")
+                    Text(stringResource(R.string.searching_devices))
                 } else if (devices.isEmpty()) {
-                    Text("No devices found")
+                    Text(stringResource(R.string.no_devices_found))
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        "Make sure your Chromecast is on the same Wi‑Fi network.",
+                        stringResource(R.string.chromecast_help),
                         style = MaterialTheme.typography.bodyMedium
                     )
                 } else {
@@ -498,7 +500,7 @@ fun MainScreen() {
                     horizontalArrangement = Arrangement.End
                 ) {
                     TextButton(onClick = { showCastDialog = false }) {
-                        Text("Close")
+                        Text(stringResource(R.string.close))
                     }
                 }
             }

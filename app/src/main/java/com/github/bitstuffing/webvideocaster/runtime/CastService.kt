@@ -5,6 +5,7 @@ import android.content.Intent
 import android.os.*
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import com.github.bitstuffing.webvideocaster.R
 import com.github.bitstuffing.webvideocaster.utils.CastDevice
 import com.github.bitstuffing.webvideocaster.utils.CastUtils
 import kotlinx.coroutines.*
@@ -27,7 +28,7 @@ class CastService : Service() {
         super.onCreate()
         Log.d(TAG, "SERVICE CREATED")
         createChannel()
-        startForeground(NOTIFICATION_ID, buildNotification("Buscando Chromecast..."))
+        startForeground(NOTIFICATION_ID, buildNotification(getString(R.string.searching_chromecast)))
 
         CoroutineScope(Dispatchers.IO).launch {
             device = CastUtils.searchDevices(applicationContext).firstOrNull()
@@ -91,7 +92,7 @@ class CastService : Service() {
     private fun buildNotification(text:String):Notification {
         return NotificationCompat.Builder(this,CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_media_play)
-            .setContentTitle("Web Video Caster")
+            .setContentTitle(getString(R.string.app_name))
             .setContentText(text)
             .setOngoing(true)
             .build()
@@ -110,7 +111,7 @@ class CastService : Service() {
                 .createNotificationChannel(
                     NotificationChannel(
                         CHANNEL_ID,
-                        "Chromecast Remote",
+                        getString(R.string.chromecast_remote),
                         NotificationManager.IMPORTANCE_LOW
                     )
                 )

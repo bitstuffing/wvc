@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
+import com.github.bitstuffing.webvideocaster.R
 
 const val USER_AGENT = "Mozilla/5.0 (Linux; Android 16; Pixel 10 Pro Build/CP1A.260505.005; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/148.0.7778.225 Mobile Safari/537.36 (Mobile; afma-sdk-a-v261833035.261833035.0)"
 
@@ -21,7 +22,7 @@ fun openWithVlc(context: Context, url: String) {
 
         Toast.makeText(
             context,
-            "VLC no instalado o no compatible",
+            context.getString(R.string.vlc_not_installed),
             Toast.LENGTH_SHORT
         ).show()
     }
