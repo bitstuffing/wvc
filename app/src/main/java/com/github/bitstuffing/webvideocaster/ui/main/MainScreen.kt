@@ -79,6 +79,7 @@ fun MainScreen() {
     // ─────────────────────────────
     ModalNavigationDrawer(
         drawerState = drawerState,
+        gesturesEnabled = drawerState.isOpen,
         drawerContent = {
 
             ModalDrawerSheet {
