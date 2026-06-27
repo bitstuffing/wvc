@@ -125,7 +125,7 @@ object CastUtils {
             found.values.sortedBy { it.friendlyName.lowercase() }
         }
 
-    suspend fun searchDevices(context: Context, timeoutMs: Long = 10000L): List<CastDevice> {
+    suspend fun searchDevices(context: Context, timeoutMs: Long = 3000L): List<CastDevice> {
         return ssdpDiscover(context, timeoutMs)
     }
 

@@ -104,7 +104,7 @@ class CastUtilsInstrumentedTest {
         val lock = CastUtils.acquireMulticastLock(context)
 
         try {
-            val devices = CastUtils.searchDevices(context)
+            val devices = CastUtils.searchDevices(context, 5000L)
             val device = devices.firstOrNull()
 
             assertNotNull("No cast devices found", device)

@@ -182,7 +182,7 @@ fun MainScreen() {
                                 scope.launch {
                                     val lock = CastUtils.acquireMulticastLock(context)
                                     try {
-                                        devices = CastUtils.searchDevices(context)
+                                        devices = CastUtils.searchDevices(context, 5000L)
                                     } finally {
                                         lock.release()
                                         isSearching = false
