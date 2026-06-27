@@ -10,12 +10,14 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -430,37 +432,76 @@ fun MainScreen() {
     // CAST DIALOG
     // ─────────────────────────────
     if (showCastDialog) {
-        AlertDialog(
-            onDismissRequest = { showCastDialog = false },
-            title = { Text("Chromecast") },
-            text = {
-                Column {
-                    if (isSearching) {
-                        Text("Finding devices...")
-                    } else if (devices.isEmpty()) {
-                        Text("Doesnt find devices")
-                    } else {
-                        devices.forEach { device ->
-                            Text(
-                                device.friendlyName,
-                                Modifier
+        ModalBottomSheet(
+            onDismissRequest = { showCastDialog = false }
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+            ) {
+                Text(
+                    text = "Cast devices",
+                    style = MaterialTheme.typography.headlineSmall
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                if (isSearching) {
+                    LinearProgressIndicator(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(4.dp)
+                            .clip(RoundedCornerShape(999.dp))
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text("Searching for devices...")
+                } else if (devices.isEmpty()) {
+                    Text("No devices found")
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        "Make sure your Chromecast is on the same Wi‑Fi network.",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                } else {
+                    LazyColumn {
+                        items(devices) { device ->
+                            ListItem(
+                                headlineContent = { Text(device.friendlyName) },
+                                supportingContent = { Text(device.ip) },
+                                leadingContent = {
+                                    Icon(
+                                        imageVector = Icons.Default.Cast,
+                                        contentDescription = null
+                                    )
+                                },
+                                modifier = Modifier
                                     .fillMaxWidth()
+                                    .clip(RoundedCornerShape(16.dp))
                                     .clickable {
                                         selectedDevice = device
                                         connected = true
                                         showCastDialog = false
                                     }
-                                    .padding(12.dp)
+                                    .padding(vertical = 4.dp)
                             )
+                            HorizontalDivider()
                         }
                     }
                 }
-            },
-            confirmButton = {
-                TextButton(onClick = { showCastDialog = false }) {
-                    Text("Close")
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    TextButton(onClick = { showCastDialog = false }) {
+                        Text("Close")
+                    }
                 }
             }
-        )
+        }
     }
+
 }
