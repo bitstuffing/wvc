@@ -19,4 +19,14 @@
     <string name="searching_chromecast">Buscando Chromecast&#8230;</string>
     <string name="chromecast_remote">Control remoto de Chromecast</string>
     <string name="vlc_not_installed">VLC no instalado o no compatible</string>
+    <string name="cast_service_channel_name">Servicio de Transmisión</string>
+    <string name="notification_title">Casting activo</string>
+    <string name="notification_text">Controlando reproducción</string>
+    <string name="video_clip_label">vídeo</string>
+    <string name="notification_no_media">Ningún medio seleccionado</string>
+    <string name="notification_playing">Reproduciendo</string>
+    <string name="notification_paused">Pausado</string>
+    <string name="pause">Pausar</string>
+    <string name="play">Reproducir</string>
+    <string name="stop">Detener</string>
 </resources>

@@ -1,6 +1,10 @@
 package com.github.bitstuffing.webvideocaster.ui.main
 
 import android.annotation.SuppressLint
+import android.content.ComponentName
+import android.content.ServiceConnection
+import android.os.IBinder
+import android.util.Log
 import android.view.View
 import android.webkit.*
 import android.widget.FrameLayout
@@ -23,7 +27,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import com.github.bitstuffing.webvideocaster.MainActivity
 import com.github.bitstuffing.webvideocaster.R
+import com.github.bitstuffing.webvideocaster.runtime.CastService
 import com.github.bitstuffing.webvideocaster.utils.*
 import kotlinx.coroutines.launch
 
@@ -33,8 +39,14 @@ import kotlinx.coroutines.launch
 fun MainScreen() {
 
     val context = LocalContext.current
-    val activity = context as ComponentActivity
+    val activity = context as MainActivity
+    val castService = activity.castServiceState.value
     val scope = rememberCoroutineScope()
+
+    // to avoid ide errors
+    val videoDetectedText = stringResource(R.string.video_detected)
+    val noDeviceSelectedText = stringResource(R.string.no_device_selected)
+    val videoClipLabelText = stringResource(R.string.video_clip_label)
 
     // ─────────────────────────────
     // WEB STATE
@@ -53,9 +65,9 @@ fun MainScreen() {
     var showCastDialog by remember { mutableStateOf(false) }
     var devices by remember { mutableStateOf<List<CastDevice>>(emptyList()) }
     var isSearching by remember { mutableStateOf(false) }
-    var session: CastSession? = null
+    var session by remember { mutableStateOf<CastSession?>(null) }
     var connected by remember { mutableStateOf(false) }
-    var selectedDevice by remember { mutableStateOf<CastDevice?>(value = CastDevice(ip = "192.168.1.255", friendlyName = "Chromecast")) }
+    var selectedDevice by remember { mutableStateOf<CastDevice?>(null) }
 
 
     // ─────────────────────────────
@@ -338,7 +350,7 @@ fun MainScreen() {
                                             addVideo(url)
                                             Toast.makeText(
                                                 activity,
-                                                activity.getString(R.string.video_detected),
+                                                videoDetectedText,
                                                 Toast.LENGTH_SHORT
                                             ).show()
                                         }
@@ -398,11 +410,19 @@ fun MainScreen() {
                     showVideoMenu = false
 
                     selectedDevice?.let { device ->
-                        CastUtils.castUrl(device, url){
-                            session = it
+
+                        CastUtils.castUrl(device, url) { result ->
+
+                            Log.d("CAST_MAIN", "castUrl CALLBACK FIRED → $result")
+
+                            result?.let {
+                                Log.d("CAST_MAIN", "SESSION OK → calling service")
+                                castService?.attachSession(it, url)
+                            }
                         }
+
                     } ?: run {
-                        Toast.makeText(context, context.getString(R.string.no_device_selected), Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, noDeviceSelectedText, Toast.LENGTH_SHORT).show()
                     }
                 }
             )
@@ -424,7 +444,7 @@ fun MainScreen() {
                         context.getSystemService(android.content.ClipboardManager::class.java)
 
                     clipboard.setPrimaryClip(
-                        android.content.ClipData.newPlainText("video", url)
+                        android.content.ClipData.newPlainText(videoClipLabelText, url)
                     )
                 }
             )
@@ -475,7 +495,8 @@ fun MainScreen() {
                                 leadingContent = {
                                     Icon(
                                         imageVector = Icons.Default.Cast,
-                                        contentDescription = null
+                                        contentDescription = null,
+                                        tint = if (selectedDevice == device) Color.Green else Color.Unspecified
                                     )
                                 },
                                 modifier = Modifier

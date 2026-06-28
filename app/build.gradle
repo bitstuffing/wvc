@@ -13,7 +13,7 @@ android {
 
     defaultConfig {
         applicationId "com.github.bitstuffing.webvideocaster"
-        minSdk 24
+        minSdk 26
         targetSdk 36
         versionCode 1
         versionName "1.0"
@@ -56,4 +56,5 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.media3:media3-exoplayer:1.4.1")
     implementation("androidx.media3:media3-ui:1.4.1")
+    implementation "androidx.media:media:1.4.1"
 }

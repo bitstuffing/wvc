@@ -1,130 +1,227 @@
 package com.github.bitstuffing.webvideocaster.runtime
 
-import android.app.*
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.Service
 import android.content.Intent
-import android.os.*
+import android.os.Binder
+import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
-import com.github.bitstuffing.webvideocaster.R
-import com.github.bitstuffing.webvideocaster.utils.CastDevice
-import com.github.bitstuffing.webvideocaster.utils.CastUtils
+import com.github.bitstuffing.webvideocaster.utils.CastConnectionManager
+import com.github.bitstuffing.webvideocaster.utils.CastSession
 import kotlinx.coroutines.*
 
 class CastService : Service() {
 
-    companion object {
-        private const val TAG = "CAST_SERVICE"
-        private const val CHANNEL_ID = "cast_remote"
-        private const val NOTIFICATION_ID = 1001
-        private const val TEST_URL = "https://directo.tuwebtv.es/canal1.m3u8"
+    private val binder = LocalBinder()
+
+    inner class LocalBinder : Binder() {
+        fun getService(): CastService = this@CastService
     }
 
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    override fun onBind(intent: Intent?): IBinder {
+        Log.d("CAST_SERVICE", "onBind CALLED")
+        return binder
+    }
+
+    // ----------------------------
+    // CORE
+    // ----------------------------
     private var manager: CastConnectionManager? = null
-    private var connecting = false
-    private var device: CastDevice? = CastDevice(ip = "192.168.1.255", friendlyName = "Chromecast")
+    private var session: CastSession? = null
+
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var statusJob: Job? = null
+
+    // ----------------------------
+    // NOTIFICATION STATE
+    // ----------------------------
+    private var isPlaying = false
+    private var hasMedia = false
+    private var lastMediaSessionId: Int? = null
+
+    private val channelId = "cast_service"
+
+    companion object {
+        private const val ACTION_PLAY = "cast_play"
+        private const val ACTION_PAUSE = "cast_pause"
+    }
 
     override fun onCreate() {
         super.onCreate()
-        Log.d(TAG, "SERVICE CREATED")
-        createChannel()
-        startForeground(NOTIFICATION_ID, buildNotification(getString(R.string.searching_chromecast)))
-
-        CoroutineScope(Dispatchers.IO).launch {
-            device = CastUtils.searchDevices(applicationContext).firstOrNull()
-            startLoop()
-        }
+        Log.d("CAST_SERVICE", "Service created")
+        createNotificationChannel()
     }
 
+    // --------------------------------------------------
+    // ATTACH SESSION
+    // --------------------------------------------------
+    fun attachSession(session: CastSession, url: String) {
 
-    private fun startLoop() {
-        scope.launch {
-            while(isActive) {
-                val session = CastSessionHolder.get()
+        Log.d("CAST_SERVICE", "attachSession()")
 
-                if(session == null) {
-                    Log.d(TAG,"No session -> connecting")
-                    createSession()
+        this.session = session
+        this.manager = CastConnectionManager(session)
+
+        hasMedia = true
+        isPlaying = true
+
+        startStatusLoop()
+        startForeground(1, buildNotification())
+    }
+
+    // --------------------------------------------------
+    // LOOP STATUS (SOLO DEBUG + UPDATE UI STATE)
+    // --------------------------------------------------
+    private fun startStatusLoop() {
+
+        statusJob?.cancel()
+
+        statusJob = serviceScope.launch {
+
+            Log.d("CAST_SERVICE", "status loop started")
+
+            while (isActive) {
+
+                val m = manager
+
+                if (m == null) {
+                    Log.d("CAST_SERVICE", "manager = null")
                 } else {
-                    if(manager == null) {
-                        Log.d(TAG,"Creating manager")
-                        manager = CastConnectionManager(session)
+
+                    val ready = m.isReady()
+                    val mediaId = m.getMediaSessionId()
+
+                    val newPlaying = ready && mediaId != null
+
+                    if (mediaId != lastMediaSessionId) {
+                        Log.d("CAST_SERVICE", "MEDIA CHANGE → $mediaId")
+                        lastMediaSessionId = mediaId
                     }
 
-                    updateNotification(session.device.friendlyName)
+                    if (newPlaying != isPlaying) {
+                        isPlaying = newPlaying
+                        Log.d("CAST_SERVICE", "PLAY STATE CHANGED → $isPlaying")
+                    }
+
+                    hasMedia = ready
+
+                    Log.d(
+                        "CAST_SERVICE",
+                        "loop → ready=$ready mediaSessionId=$mediaId playing=$isPlaying"
+                    )
                 }
 
-                delay(5000)
+                delay(1000)
             }
         }
     }
 
-    private suspend fun createSession() {
-
-        if(connecting) return
-
-        connecting = true
-
-        try {
-
-            if(device == null) {
-                Log.d(TAG,"No Chromecast found")
-                return
-            }
-
-            Log.d(TAG,"Found ${device!!.ip}")
-
-            CastUtils.castUrl(device!!,TEST_URL) { result ->
-
-                if(result != null) {
-                    Log.d(TAG,"SESSION CREATED")
-                    CastSessionHolder.set(result)
-                } else {
-                    Log.d(TAG,"SESSION FAILED")
-                }
-            }
-
-        } finally {
-            connecting = false
-        }
+    // --------------------------------------------------
+    // CONTROLS
+    // --------------------------------------------------
+    fun play() {
+        manager?.play()
+        isPlaying = true
+        updateNotification()
     }
 
-    private fun buildNotification(text:String):Notification {
-        return NotificationCompat.Builder(this,CHANNEL_ID)
+    fun pause() {
+        manager?.pause()
+        isPlaying = false
+        updateNotification()
+    }
+
+    // --------------------------------------------------
+    // NOTIFICATION
+    // --------------------------------------------------
+    private fun buildNotification(): Notification {
+
+        val statusText = when {
+            !hasMedia -> "No media"
+            isPlaying -> "Playing"
+            else -> "Paused"
+        }
+
+        val playPauseAction =
+            if (isPlaying) {
+                NotificationCompat.Action(
+                    android.R.drawable.ic_media_pause,
+                    "Pause",
+                    actionIntent(ACTION_PAUSE)
+                )
+            } else {
+                NotificationCompat.Action(
+                    android.R.drawable.ic_media_play,
+                    "Play",
+                    actionIntent(ACTION_PLAY)
+                )
+            }
+
+        return NotificationCompat.Builder(this, channelId)
+            .setContentTitle("Cast active")
+            .setContentText(statusText)
             .setSmallIcon(android.R.drawable.ic_media_play)
-            .setContentTitle(getString(R.string.app_name))
-            .setContentText(text)
+            .setOnlyAlertOnce(true)
+            .addAction(playPauseAction)
             .setOngoing(true)
             .build()
     }
 
-    private fun updateNotification(text:String) {
-        getSystemService(NotificationManager::class.java)
-            .notify(NOTIFICATION_ID,buildNotification(text))
+    private fun updateNotification() {
+        startForeground(1, buildNotification())
     }
 
-    private fun createChannel() {
+    // --------------------------------------------------
+    // ACTION HANDLING
+    // --------------------------------------------------
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
 
-        if(Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-
-            getSystemService(NotificationManager::class.java)
-                .createNotificationChannel(
-                    NotificationChannel(
-                        CHANNEL_ID,
-                        getString(R.string.chromecast_remote),
-                        NotificationManager.IMPORTANCE_LOW
-                    )
-                )
+        when (intent?.action) {
+            ACTION_PLAY -> play()
+            ACTION_PAUSE -> pause()
         }
+
+        return START_STICKY
     }
 
+    private fun actionIntent(action: String): PendingIntent {
+        val intent = Intent(this, CastService::class.java).apply {
+            this.action = action
+        }
+
+        return PendingIntent.getService(
+            this,
+            action.hashCode(),
+            intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+    }
+
+    // --------------------------------------------------
+    // CHANNEL
+    // --------------------------------------------------
+    private fun createNotificationChannel() {
+        val channel = NotificationChannel(
+            channelId,
+            "Cast Service",
+            NotificationManager.IMPORTANCE_LOW
+        )
+
+        getSystemService(NotificationManager::class.java)
+            .createNotificationChannel(channel)
+    }
+
+    // --------------------------------------------------
+    // CLEANUP
+    // --------------------------------------------------
     override fun onDestroy() {
-        Log.d(TAG,"DESTROY")
-        manager?.close()
-        CastSessionHolder.clear()
-        scope.cancel()
         super.onDestroy()
+        statusJob?.cancel()
+        serviceScope.cancel()
+        manager?.close()
     }
-
-    override fun onBind(intent:Intent?):IBinder? = null
 }

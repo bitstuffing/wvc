@@ -10,7 +10,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.xml.sax.InputSource
-import java.io.BufferedOutputStream
 import java.io.StringReader
 import java.net.*
 import javax.net.ssl.*
@@ -27,10 +26,10 @@ data class CastDevice(
 
 data class CastSession(
     val device: CastDevice,
-    val sourceId: String,
-    val transportId: String,
-    val sessionId: String,
-    val mediaSessionId: Int,
+    var sourceId: String,
+    var transportId: String,
+    val sessionId: String?,
+    var mediaSessionId: Int?,
     val socket: SSLSocket,
     var requestId: Int
 )
@@ -435,6 +434,156 @@ object CastUtils {
         castSeek(session, newTime)
     }
 
+    fun getSession(device: CastDevice): CastSession? {
+
+        return try {
+
+            Log.d("CAST_DEBUG", "🔌 Opening socket -> ${device.ip}")
+
+            val socket = createSecureSocket(device.ip)
+
+            val out = socket.outputStream
+            val input = socket.inputStream
+
+            val sourceId = "sender-0"
+            val destinationId = "receiver-0"
+            var requestId = 1
+
+            fun send(payload: String, namespace: String) {
+                val frame = formatMessage(sourceId, destinationId, namespace, payload)
+                Log.d("CAST_DEBUG", "➡️ SEND [$namespace] $payload")
+                out.write(frame)
+                out.flush()
+            }
+
+            fun recv(tag: String): String {
+                val buf = ByteArray(8192)
+                val len = input.read(buf)
+
+                val raw = if (len > 0) String(buf, 0, len) else ""
+
+                Log.d("CAST_DEBUG", "⬅️ RECV [$tag] len=$len raw=$raw")
+
+                return raw
+            }
+
+            // =========================================================
+            // CONNECT
+            // =========================================================
+            Log.d("CAST_DEBUG", "🤝 CONNECT phase")
+
+            send("""{"type":"CONNECT"}""", "urn:x-cast:com.google.cast.tp.connection")
+
+            recv("CONNECT")
+
+            // =========================================================
+            // GET_STATUS
+            // =========================================================
+            Log.d("CAST_DEBUG", "📡 GET_STATUS phase")
+
+            send(
+                """{"type":"GET_STATUS","requestId":${requestId++}}""",
+                "urn:x-cast:com.google.cast.receiver"
+            )
+
+            var transportId: String? = null
+            var mediaSessionId: Int? = null
+
+            val start = System.currentTimeMillis()
+            val timeout = 4000L
+
+            // =========================================================
+            // STATE LOOP
+            // =========================================================
+            while (System.currentTimeMillis() - start < timeout) {
+
+                val raw = recv("LOOP")
+
+                if (raw.isBlank()) {
+                    Log.d("CAST_DEBUG", "⚠️ Empty frame")
+                    continue
+                }
+
+                val jsonStart = raw.indexOf("{")
+                val jsonEnd = raw.lastIndexOf("}")
+
+                if (jsonStart == -1 || jsonEnd == -1) {
+                    Log.d("CAST_DEBUG", "⚠️ No JSON detected")
+                    continue
+                }
+
+                val jsonStr = raw.substring(jsonStart, jsonEnd + 1)
+
+                val json = try {
+                    JSONObject(jsonStr)
+                } catch (e: Exception) {
+                    Log.e("CAST_DEBUG", "❌ JSON parse error: $jsonStr", e)
+                    continue
+                }
+
+                val type = json.optString("type")
+
+                Log.d("CAST_DEBUG", "📩 PARSED type=$type json=$jsonStr")
+
+                // =========================================================
+                // RECEIVER STATUS
+                // =========================================================
+                if (type == "RECEIVER_STATUS") {
+
+                    val app = json.optJSONObject("status")
+                        ?.optJSONArray("applications")
+                        ?.optJSONObject(0)
+
+                    transportId = app?.optString("transportId")
+
+                    Log.d("CAST_DEBUG", "🎯 RECEIVER_STATUS transportId=$transportId")
+
+                    if (!transportId.isNullOrBlank()) {
+                        Log.d("CAST_DEBUG", "✅ transportId locked -> $transportId")
+                        break
+                    }
+                }
+
+                // =========================================================
+                // MEDIA STATUS
+                // =========================================================
+                if (type == "MEDIA_STATUS") {
+
+                    val status = json.optJSONArray("status")
+                        ?.optJSONObject(0)
+
+                    mediaSessionId = status?.optInt("mediaSessionId")
+
+                    Log.d("CAST_DEBUG", "🎬 MEDIA_STATUS mediaSessionId=$mediaSessionId")
+                }
+            }
+
+            // =========================================================
+            // VALIDATION
+            // =========================================================
+            if (transportId.isNullOrBlank()) {
+                Log.e("CAST_DEBUG", "❌ No transportId received (timeout)")
+                return null
+            }
+
+            Log.d("CAST_DEBUG", "✅ SESSION READY transportId=$transportId mediaSessionId=$mediaSessionId")
+
+            CastSession(
+                device = device,
+                sourceId = sourceId,
+                transportId = transportId,
+                sessionId = null,
+                mediaSessionId = mediaSessionId ?: -1,
+                socket = socket,
+                requestId = requestId
+            )
+
+        } catch (e: Exception) {
+            Log.e("CAST_DEBUG", "💥 GET SESSION ERROR", e)
+            null
+        }
+    }
+
     fun castUrl(
         device: CastDevice,
         url: String,
@@ -602,7 +751,7 @@ object CastUtils {
     // 🔐 TLS SOCKET (8009)
     // =========================================================
 
-    private fun createSecureSocket(ip: String): SSLSocket {
+    fun createSecureSocket(ip: String): SSLSocket {
         val context = SSLContext.getInstance("TLS")
 
         context.init(null, arrayOf(object : X509TrustManager {

@@ -1,0 +1,32 @@
+<resources>
+    <string name="app_name">Web Video Caster</string>
+    <string name="videos_detected">🎥 Videos detected</string>
+    <string name="clean_history">Clean history</string>
+    <string name="no_videos_yet">No videos yet</string>
+    <string name="videos">Videos</string>
+    <string name="cast">Cast</string>
+    <string name="go">Go</string>
+    <string name="video_detected">🎥 Video detected</string>
+    <string name="cast_menu">📺 Cast</string>
+    <string name="no_device_selected">No device selected</string>
+    <string name="vlc_menu">📺 VLC</string>
+    <string name="copy_menu">📋 Copy</string>
+    <string name="cast_devices">Cast devices</string>
+    <string name="searching_devices">Searching for devices&#8230;</string>
+    <string name="no_devices_found">No devices found</string>
+    <string name="chromecast_help">Make sure your Chromecast is on the same Wi&#8211;Fi network.</string>
+    <string name="close">Close</string>
+    <string name="searching_chromecast">Searching for Chromecast&#8230;</string>
+    <string name="chromecast_remote">Chromecast Remote</string>
+    <string name="vlc_not_installed">VLC not installed or not compatible</string>
+    <string name="cast_service_channel_name">Cast Service</string>
+    <string name="notification_title">Casting active</string>
+    <string name="notification_text">Controlling playback</string>
+    <string name="video_clip_label">video</string>
+    <string name="notification_no_media">No media selected</string>
+    <string name="notification_playing">Playing</string>
+    <string name="notification_paused">Paused</string>
+    <string name="pause">Pause</string>
+    <string name="play">Play</string>
+    <string name="stop">Stop</string>
+</resources>
