@@ -29,4 +29,10 @@
     <string name="pause">Pause</string>
     <string name="play">Play</string>
     <string name="stop">Stop</string>
+    <string name="back">Back</string>
+    <string name="forward">Forward</string>
+    <string name="reload">Reload</string>
+    <string name="web_address">Web address</string>
+    <string name="cast_service_unavailable">Cast service is unavailable</string>
+    <string name="close_detected_videos">Close detected videos</string>
 </resources>

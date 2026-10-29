@@ -10,6 +10,7 @@ import android.os.Binder
 import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import com.github.bitstuffing.webvideocaster.R
 import com.github.bitstuffing.webvideocaster.utils.CastConnectionManager
 import com.github.bitstuffing.webvideocaster.utils.CastSession
 import kotlinx.coroutines.*
@@ -141,28 +142,20 @@ class CastService : Service() {
     private fun buildNotification(): Notification {
 
         val statusText = when {
-            !hasMedia -> "No media"
-            isPlaying -> "Playing"
-            else -> "Paused"
+            !hasMedia -> getString(R.string.notification_no_media)
+            isPlaying -> getString(R.string.notification_playing)
+            else -> getString(R.string.notification_paused)
         }
 
         val playPauseAction =
             if (isPlaying) {
-                NotificationCompat.Action(
-                    android.R.drawable.ic_media_pause,
-                    "Pause",
-                    actionIntent(ACTION_PAUSE)
-                )
+                NotificationCompat.Action(android.R.drawable.ic_media_pause,getString(R.string.pause),actionIntent(ACTION_PAUSE))
             } else {
-                NotificationCompat.Action(
-                    android.R.drawable.ic_media_play,
-                    "Play",
-                    actionIntent(ACTION_PLAY)
-                )
+                NotificationCompat.Action(android.R.drawable.ic_media_play,getString(R.string.play),actionIntent(ACTION_PLAY))
             }
 
         return NotificationCompat.Builder(this, channelId)
-            .setContentTitle("Cast active")
+            .setContentTitle(getString(R.string.notification_title))
             .setContentText(statusText)
             .setSmallIcon(android.R.drawable.ic_media_play)
             .setOnlyAlertOnce(true)
@@ -179,12 +172,10 @@ class CastService : Service() {
     // ACTION HANDLING
     // --------------------------------------------------
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-
         when (intent?.action) {
             ACTION_PLAY -> play()
             ACTION_PAUSE -> pause()
         }
-
         return START_STICKY
     }
 
@@ -192,27 +183,15 @@ class CastService : Service() {
         val intent = Intent(this, CastService::class.java).apply {
             this.action = action
         }
-
-        return PendingIntent.getService(
-            this,
-            action.hashCode(),
-            intent,
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-        )
+        return PendingIntent.getService(this,action.hashCode(),intent,PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
     }
 
     // --------------------------------------------------
     // CHANNEL
     // --------------------------------------------------
     private fun createNotificationChannel() {
-        val channel = NotificationChannel(
-            channelId,
-            "Cast Service",
-            NotificationManager.IMPORTANCE_LOW
-        )
-
-        getSystemService(NotificationManager::class.java)
-            .createNotificationChannel(channel)
+        val channel = NotificationChannel(channelId,getString(R.string.cast_service_channel_name),NotificationManager.IMPORTANCE_LOW)
+        getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
     }
 
     // --------------------------------------------------
