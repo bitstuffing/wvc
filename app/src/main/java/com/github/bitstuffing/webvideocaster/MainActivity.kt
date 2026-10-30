@@ -20,6 +20,7 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
@@ -27,7 +28,10 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
-import com.github.bitstuffing.webvideocaster.R
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.core.content.ContextCompat
 import com.github.bitstuffing.webvideocaster.runtime.CastService
 import com.github.bitstuffing.webvideocaster.ui.theme.WebVideoCasterTheme
 import com.github.bitstuffing.webvideocaster.utils.USER_AGENT
@@ -55,6 +59,22 @@ class MainActivity : ComponentActivity() {
     private val adBlocker = AdBlocker()
     private lateinit var adBlockRepository: AdBlockRepository
 
+    private val notificationPermissionLauncher =
+        registerForActivityResult(
+            ActivityResultContracts.RequestPermission()
+        ) { granted ->
+            Log.d("CAST_PERMISSION","Notification permission granted: $granted")
+        }
+
+    private fun requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val permission = Manifest.permission.POST_NOTIFICATIONS
+            if (ContextCompat.checkSelfPermission(this, permission) != PackageManager.PERMISSION_GRANTED) {
+                notificationPermissionLauncher.launch(permission)
+            }
+        }
+    }
+
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
             val binder = service as CastService.LocalBinder
@@ -68,6 +88,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        requestNotificationPermission()
 
         val adBlockSettings = AdBlockSettings.load(this)
 

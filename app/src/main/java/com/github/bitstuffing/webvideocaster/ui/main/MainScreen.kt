@@ -120,9 +120,13 @@ fun MainScreen(
                     device == null -> Toast.makeText(context,R.string.no_device_selected,Toast.LENGTH_SHORT).show()
                     service == null -> Toast.makeText(context,R.string.cast_service_unavailable,Toast.LENGTH_SHORT).show()
                     else -> CastUtils.castUrl(device, url) { result ->
-                        Log.d("CAST_MAIN", "castUrl CALLBACK FIRED → $result")
-                        result?.let { session ->
-                            service.attachSession(session, url)
+                        scope.launch {
+                            if (result == null) {
+                                Toast.makeText(context, R.string.cast_service_unavailable, Toast.LENGTH_SHORT).show()
+                                return@launch
+                            }
+                            Log.d("CAST_MAIN", "Cast session ready")
+                            service.attachSession(result, url)
                         }
                     }
                 }
@@ -146,6 +150,12 @@ fun MainScreen(
             onSelectDevice = { device ->
                 selectedDevice = device
                 showCastDialog = false
+                val service = castServiceState.value
+                if (service != null) {
+                    service.monitorDevice(device)
+                } else {
+                    Toast.makeText(context, R.string.cast_service_unavailable, Toast.LENGTH_SHORT).show()
+                }
             },
             onDismiss = { showCastDialog = false }
         )

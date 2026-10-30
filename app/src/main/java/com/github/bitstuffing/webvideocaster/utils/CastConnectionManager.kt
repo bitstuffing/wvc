@@ -5,7 +5,6 @@ import com.github.bitstuffing.webvideocaster.utils.CastUtils.formatMessage
 import kotlinx.coroutines.*
 import org.json.JSONArray
 import org.json.JSONObject
-import java.net.SocketException
 import java.util.*
 
 class CastConnectionManager(
@@ -34,6 +33,19 @@ class CastConnectionManager(
     @Volatile private var url: String? = null
     @Volatile private var currentTime: Double = 0.0
     private var mediaUpdateJob: Job? = null
+
+    enum class CastPlayerState {
+        UNKNOWN,
+        IDLE,
+        PLAYING,
+        PAUSED,
+        BUFFERING
+    }
+
+    @Volatile
+    private var playerState = CastPlayerState.UNKNOWN
+
+    fun getPlayerState(): CastPlayerState = playerState
 
     private val connectedTransports = Collections.synchronizedSet(mutableSetOf<String>())
 
@@ -74,59 +86,39 @@ class CastConnectionManager(
         }
     }
 
-    // -----------------------------
-    // CORE DISPATCH
-    // -----------------------------
     private fun handleReceivedData(raw: String) {
-
         val namespaceRegex = Regex("""(urn:[^"0-9(){}\s]+)""")
         val namespace = namespaceRegex.find(raw)?.value
-
         val json = CastUtils.extractJson(raw)
         val type = json?.optString("type") ?: ""
         val reqId = json?.optInt("requestId") ?: 0
-
         if (json == null) {
             when (namespace) {
-
                 "urn:x-cast:com.google.cast.tp.heartbeat" -> {
                     log(TAG, "heartbeat...")
                     sendHeartbeatPong()
                 }
-
                 "urn:x-cast:com.google.cast.tp.deviceauth" -> {
                     log(TAG, "device auth...")
                     sendConnect()
                 }
-
                 else -> log(TAG, "unknown raw=$raw")
             }
             return
         }
-
         log(TAG, "📩 RECEIVED type=$type json=$json")
-
         when (type) {
-
-            // ---------------- CONNECT ----------------
             "CONNECT" -> {
                 log(TAG, "connect ack")
             }
-
             "CONNECTED" -> {
                 log(TAG, "connected ok")
             }
-
-            // ---------------- PING ----------------
             "PING" -> {
                 sendHeartbeatPong()
             }
-
-            // ---------------- RECEIVER_STATUS ----------------
             "RECEIVER_STATUS" -> {
-                val app = json.optJSONObject("status")
-                    ?.optJSONArray("applications")
-                    ?.optJSONObject(0)
+                val app = json.optJSONObject("status")?.optJSONArray("applications")?.optJSONObject(0)
 
                 val newTransportId = app?.optString("transportId")
 
@@ -140,38 +132,49 @@ class CastConnectionManager(
                     sendGetMediaStatus()
                 }
             }
-
-            // ---------------- MEDIA_STATUS ----------------
             "MEDIA_STATUS" -> {
-                val status = json.optJSONArray("status")
-                    ?.optJSONObject(0)
-
-                val mid = status?.optInt("mediaSessionId")
-
-                if (mid != null && mid != -1) {
+                val statuses = json.optJSONArray("status")
+                val status = statuses?.optJSONObject(0)
+                if (status == null) {
+                    mediaSessionId = null
+                    session.mediaSessionId = null
+                    mediaReady = false
+                    playerState = CastPlayerState.IDLE
+                    log(TAG, "MEDIA_STATUS: no active media")
+                    return
+                }
+                val mid = status.optInt("mediaSessionId", -1)
+                if (mid > 0) {
                     mediaSessionId = mid
                     session.mediaSessionId = mid
-
                     mediaReady = true
-                    log(TAG, "🎬 mediaReady=true mediaSessionId=$mediaSessionId")
+                } else {
+                    mediaSessionId = null
+                    session.mediaSessionId = null
+                    mediaReady = false
                 }
+                playerState = when (status.optString("playerState")) {
+                    "PLAYING" -> CastPlayerState.PLAYING
+                    "PAUSED" -> CastPlayerState.PAUSED
+                    "BUFFERING" -> CastPlayerState.BUFFERING
+                    "IDLE" -> CastPlayerState.IDLE
+                    else -> CastPlayerState.UNKNOWN
+                }
+                log(TAG, "MEDIA_STATUS: state=$playerState, mediaSessionId=$mediaSessionId")
             }
-
-            // ---------------- SEEK ----------------
             "SEEK" -> {
                 val ct = json.optDouble("currentTime", 0.0)
                 currentTime = ct
             }
-
-            // ---------------- CLOSE ----------------
             "CLOSE" -> {
                 log(TAG, "close $namespace")
                 if (namespace == "urn:x-cast:com.google.cast.tp.connection") {
+                    transportId?.let { connectedTransports.remove(it) }
                     transportId = null
+                    receiverReady = false
                 }
-                player = false
+                playerState = CastPlayerState.UNKNOWN
             }
-
             else -> {
                 log(TAG, "unknown type=$type raw=$raw")
             }
@@ -179,44 +182,26 @@ class CastConnectionManager(
     }
 
     private fun launchMediaReceiver() {
-
-        val payload = JSONObject()
-            .put("type", "LAUNCH")
-            .put("appId", "CC1AD845")
-            .put("requestId", requestId++)
-
-        send(
-            payload.toString(),
-            "urn:x-cast:com.google.cast.receiver",
-            "receiver-0"
-        )
+        val payload = JSONObject().put("type", "LAUNCH").put("appId", "CC1AD845").put("requestId", requestId++)
+        send(payload.toString(), "urn:x-cast:com.google.cast.receiver", "receiver-0")
     }
 
-    // -----------------------------
-    // SEND HELPERS
-    // -----------------------------
     private fun sendConnect() {
         send("""{"type":"CONNECT"}""", "urn:x-cast:com.google.cast.tp.connection", "receiver-0")
     }
 
     private fun sendGetStatus() {
-        send(
-            """{"type":"GET_STATUS","requestId":${requestId++}}""",
-            "urn:x-cast:com.google.cast.receiver",
-            "receiver-0"
-        )
+        send("""{"type":"GET_STATUS","requestId":${requestId++}}""", "urn:x-cast:com.google.cast.receiver", "receiver-0")
     }
 
     private fun sendGetMediaStatus() {
         val tid = transportId ?: return
         if (tid.isBlank() || tid == "receiver-0") return
 
-        // IMPORTANTE: Conectar al transportId antes de pedir status
+        // IMPORTANT: connect to transportId before status request
         sendAppConnect(tid)
 
-        val payload = JSONObject()
-            .put("type", "GET_STATUS")
-            .put("requestId", requestId++)
+        val payload = JSONObject().put("type", "GET_STATUS").put("requestId", requestId++)
 
         send(payload.toString(), "urn:x-cast:com.google.cast.media", tid)
     }
@@ -229,12 +214,7 @@ class CastConnectionManager(
     }
 
     private fun sendHeartbeatPong() {
-        // Un PONG siempre responde a receiver-0 si viene del dispositivo
-        send(
-            """{"type":"PONG"}""",
-            "urn:x-cast:com.google.cast.tp.heartbeat",
-            "receiver-0"
-        )
+        send("""{"type":"PONG"}""", "urn:x-cast:com.google.cast.tp.heartbeat", "receiver-0")
     }
 
     private fun send(payload: String, namespace: String, destinationId: String) {
@@ -253,8 +233,6 @@ class CastConnectionManager(
     }
 
     private fun sendResponse(payload: String, namespace: String, destinationId: String = "receiver-0") {
-        // sendResponse se usa para actuar como receiver (según Python)
-        // Pero como somos sender, redirigimos a send con los IDs correctos para el rol.
         send(payload, namespace, destinationId)
     }
 
@@ -351,9 +329,6 @@ class CastConnectionManager(
         }
     }
 
-    // -----------------------------
-    // API pública (NO polling externo)
-    // -----------------------------
     fun isReady(): Boolean {
         return receiverReady && !transportId.isNullOrBlank()
     }
