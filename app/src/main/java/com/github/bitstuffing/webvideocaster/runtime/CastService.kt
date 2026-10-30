@@ -16,6 +16,7 @@ import com.github.bitstuffing.webvideocaster.utils.CastSession
 import kotlinx.coroutines.*
 import com.github.bitstuffing.webvideocaster.utils.CastDevice
 import com.github.bitstuffing.webvideocaster.utils.CastUtils
+import java.net.SocketTimeoutException
 
 class CastService : Service() {
 
@@ -69,27 +70,52 @@ class CastService : Service() {
 
     fun monitorDevice(device: CastDevice) {
         Log.d("CAST_SERVICE", "Starting monitor for ${device.friendlyName}")
-        startMonitoring()
+        startMonitoring(device)
     }
 
-    private fun startMonitoring() {
+    private fun startMonitoring(device: CastDevice) {
         statusJob?.cancel()
         statusJob = serviceScope.launch {
-            Log.d("CAST_SERVICE", "Monitor started")
+            Log.d("CAST_SERVICE", "Monitor started for ${device.friendlyName}")
             while (isActive) {
                 try {
-                    val currentSession = session
-                    if (currentSession == null) {
-                        Log.d("CAST_SERVICE", "No session available")
-                        delay(1000)
-                        continue
-                    }
-                    val playerState = withContext(Dispatchers.IO) {
-                        CastUtils.getMediaPlayerState(currentSession)
-                    }
-                    Log.d("CAST_SERVICE", "Player state received: $playerState")
+                    var currentSession = session
+                    var newPlayerState: String? = null
+                    do {
+                        // 1. Recover an existing session if necessary
+                        if (currentSession == null || !currentSession.socket.isConnected || currentSession.socket.isClosed) {
+                            Log.d("CAST_SERVICE", "Inspecting existing Cast session...")
+                            val newSession = withContext(Dispatchers.IO) {
+                                CastUtils.getSession(device)
+                            }
+                            if (newSession == null) {
+                                Log.d("CAST_SERVICE", "No active Cast session available")
+                                delay(2000)
+                                continue
+                            }
+                            Log.d("CAST_SERVICE", "Session recovered: transport=${newSession.transportId}, media=${newSession.mediaSessionId}")
+                            // Replace previous session and manager
+                            manager?.close()
+                            session = newSession
+                            currentSession = newSession
+                            manager = CastConnectionManager(newSession)
+                            lastMediaSessionId = newSession.mediaSessionId
+                            playerState = CastConnectionManager.CastPlayerState.UNKNOWN
+                        }
+                        try {
+                            // 2. Retrieve player state using the existing session
+                            newPlayerState = manager?.getPlayerStateString()
+                        }catch (e: SocketTimeoutException){
+                            Log.e("CAST_SERVICE", "Error retrieving player state, forcing retry", e)
+                        }
+                        Log.d("CAST_SERVICE","Player state received: $newPlayerState")
+                        if (newPlayerState == null) {
+                            currentSession = null
+                        }
+                    }while (newPlayerState == null)
+                    // 3. Update playback state
                     var changed = false
-                    when (playerState) {
+                    when (newPlayerState) {
                         "PLAYING" -> {
                             if (!isPlaying || !hasMedia) {
                                 isPlaying = true
@@ -114,17 +140,18 @@ class CastService : Service() {
                         null -> {
                             Log.d(
                                 "CAST_SERVICE",
-                                "Unable to retrieve player state; keeping previous state"
+                                "Unable to retrieve player state"
                             )
                         }
                         else -> {
                             Log.d(
                                 "CAST_SERVICE",
-                                "Unknown player state: $playerState"
+                                "Unknown player state: $newPlayerState"
                             )
                         }
                     }
 
+                    // 4. Update notification only when necessary
                     if (changed) {
                         Log.d("CAST_SERVICE", "Updating notification: playing=$isPlaying, hasMedia=$hasMedia")
                         updateNotification()
@@ -158,31 +185,41 @@ class CastService : Service() {
         startStatusLoop()
     }
 
-    // --------------------------------------------------
-    // LOOP STATUS (SOLO DEBUG + UPDATE UI STATE)
-    // --------------------------------------------------
     private fun startStatusLoop() {
         statusJob?.cancel()
         statusJob = serviceScope.launch {
+            Log.d("CAST_SERVICE", "Status monitoring started")
             while (isActive) {
-                val m = manager
-                if (m != null) {
+                try {
+                    val m = manager
+                    if (m == null) {
+                        delay(1000)
+                        continue
+                    }
                     val mediaId = m.getMediaSessionId()
                     val state = m.getPlayerState()
+                    if (state == CastConnectionManager.CastPlayerState.UNKNOWN) {
+                        delay(500)
+                        continue
+                    }
                     val newHasMedia = mediaId != null && state != CastConnectionManager.CastPlayerState.IDLE
                     val newIsPlaying = newHasMedia && state == CastConnectionManager.CastPlayerState.PLAYING
                     val changed = mediaId != lastMediaSessionId || state != playerState || newHasMedia != hasMedia || newIsPlaying != isPlaying
-                    lastMediaSessionId = mediaId
-                    playerState = state
-                    hasMedia = newHasMedia
-                    isPlaying = newIsPlaying
-
                     if (changed) {
+                        lastMediaSessionId = mediaId
+                        playerState = state
+                        hasMedia = newHasMedia
+                        isPlaying = newIsPlaying
+
                         Log.d("CAST_SERVICE", "State changed: state=$state, hasMedia=$hasMedia, playing=$isPlaying")
                         withContext(Dispatchers.Main.immediate) {
                             updateNotification()
                         }
                     }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.e("CAST_SERVICE", "Status loop error", e)
                 }
                 delay(1000)
             }

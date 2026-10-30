@@ -1,13 +1,11 @@
 package com.github.bitstuffing.webvideocaster.utils
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
-import android.net.nsd.NsdManager
-import android.net.nsd.NsdServiceInfo
 import android.net.wifi.WifiManager
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.xml.sax.InputSource
 import java.io.StringReader
@@ -18,6 +16,14 @@ import java.security.SecureRandom
 import org.json.JSONObject
 import java.io.DataInputStream
 import java.net.SocketTimeoutException
+import android.net.ConnectivityManager
+import android.net.LinkProperties
+import java.net.DatagramPacket
+import java.net.InetAddress
+import java.net.InetSocketAddress
+import java.net.MulticastSocket
+import java.net.NetworkInterface
+import java.util.Collections
 
 data class CastDevice(
     val ip: String,
@@ -38,10 +44,15 @@ data class CastSession(
 
 object CastUtils {
 
-    private const val SSDP_ADDR = "239.255.255.250"
-    private const val SSDP_PORT = 1900
-
+    private const val MDNS_GROUP = "224.0.0.251"
+    private const val MDNS_PORT = 5353
+    private const val CAST_SERVICE = "_googlecast._tcp.local."
     private const val PLAYER_ID = "CC1AD845"
+
+    private data class MdnsSrv(
+        val target: String,
+        val port: Int
+    )
 
     private fun recvCastJson(input: DataInputStream): JSONObject? {
         val length = input.readInt()
@@ -68,78 +79,238 @@ object CastUtils {
     // DISCOVERY
     // =========================
     @SuppressLint("MissingPermission")
-    private suspend fun ssdpDiscover(context: Context, timeoutMs: Long): List<CastDevice> =
-        withContext(Dispatchers.IO) {
-            val nsdManager = context.getSystemService(Context.NSD_SERVICE) as NsdManager
-            val found = linkedMapOf<String, CastDevice>()
-
-            val listener = object : NsdManager.DiscoveryListener {
-                override fun onDiscoveryStarted(regType: String) {
-                    Log.d("CAST_TEST", "Discovery started: $regType")
-                }
-
-                override fun onServiceFound(service: NsdServiceInfo) {
-                    if (service.serviceType != "_googlecast._tcp.") return
-
-                    nsdManager.resolveService(service, object : NsdManager.ResolveListener {
-                        override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
-                            Log.e("CAST_TEST", "Resolve failed: $serviceInfo error=$errorCode")
-                        }
-
-                        override fun onServiceResolved(serviceInfo: NsdServiceInfo) {
-                            val host = serviceInfo.host?.hostAddress ?: return
-
-                            val device = fetchDeviceDesc(host)?.copy(
-                                ip = host
-                            ) ?: CastDevice(
-                                friendlyName = serviceInfo.serviceName,
-                                ip = host
-                            )
-
-                            found[host] = device
-                            Log.d("CAST_TEST", "Device added: ${device.friendlyName} / ${device.ip}")
-                        }
-                    })
-                }
-
-                override fun onServiceLost(service: NsdServiceInfo) {
-                    Log.d("CAST_TEST", "Service lost: $service")
-                }
-
-                override fun onDiscoveryStopped(serviceType: String) {
-                    Log.d("CAST_TEST", "Discovery stopped: $serviceType")
-                }
-
-                override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {
-                    Log.e("CAST_TEST", "Start discovery failed: $serviceType error=$errorCode")
-                }
-
-                override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {
-                    Log.e("CAST_TEST", "Stop discovery failed: $serviceType error=$errorCode")
-                }
-            }
-
-            try {
-                nsdManager.discoverServices(
-                    "_googlecast._tcp.",
-                    NsdManager.PROTOCOL_DNS_SD,
-                    listener
-                )
-
-                delay(timeoutMs)
-            } catch (e: Exception) {
-                Log.e("CAST_TEST", "MDNS discover failed", e)
-            } finally {
-                runCatching { nsdManager.stopServiceDiscovery(listener) }
-            }
-
-            found.values.sortedBy { it.friendlyName.lowercase() }
+    private suspend fun ssdpDiscover(context: Context, timeoutMs: Long): List<CastDevice> = withContext(Dispatchers.IO) {
+        val app = context.applicationContext
+        val wifi = app.getSystemService(Context.WIFI_SERVICE) as WifiManager
+        val multicastLock = wifi.createMulticastLock("wvc_mdns").apply {
+            setReferenceCounted(false)
+            acquire()
         }
-
-    suspend fun searchDevices(context: Context, timeoutMs: Long = 3000L): List<CastDevice> {
-        return ssdpDiscover(context, timeoutMs)
+        val instances = linkedSetOf<String>()
+        val srvRecords = mutableMapOf<String, MdnsSrv>()
+        val addresses = mutableMapOf<String, String>()
+        var socket: MulticastSocket? = null
+        try {
+            val connectivity = app.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            val network = connectivity.activeNetwork
+            val linkProperties: LinkProperties? = connectivity.getLinkProperties(network)
+            val interfaceName = linkProperties?.interfaceName
+            var networkInterface = if (interfaceName != null) {
+                NetworkInterface.getByName(interfaceName)
+            } else {
+                Collections.list(NetworkInterface.getNetworkInterfaces()).firstOrNull {
+                    it.isUp && !it.isLoopback && it.supportsMulticast()
+                }
+            } ?: throw IllegalStateException("No multicast network interface")
+            Log.d("CAST_TEST", "mDNS interface: ${networkInterface.name}")
+            val group = InetAddress.getByName(MDNS_GROUP)
+            socket = MulticastSocket(null).apply {
+                reuseAddress = true
+                bind(InetSocketAddress(MDNS_PORT))
+                soTimeout = 500
+            }
+            socket.setNetworkInterface(networkInterface)
+            socket.joinGroup(InetSocketAddress(group, MDNS_PORT), networkInterface)
+            Log.d("CAST_TEST", "mDNS socket bound to UDP $MDNS_PORT")
+            Log.d("CAST_TEST", "MulticastLock acquired: ${multicastLock.isHeld}")
+            val startTime = System.currentTimeMillis()
+            var lastQuery = 0L
+            val buffer = ByteArray(9000)
+            while (System.currentTimeMillis() - startTime < timeoutMs) {
+                val now = System.currentTimeMillis()
+                if (now - lastQuery >= 2000L) {
+                    val questions = linkedSetOf<Pair<String, Int>>()
+                    questions.add(CAST_SERVICE to 12) // PTR
+                    instances.forEach {
+                        questions.add(it to 33) // SRV
+                    }
+                    srvRecords.values.forEach {
+                        questions.add(it.target to 1) // A
+                    }
+                    val query = buildMdnsQuery(questions)
+                    socket.send(DatagramPacket(query, query.size, group, MDNS_PORT))
+                    Log.d("CAST_TEST", "mDNS query sent: ${questions.size} questions")
+                    lastQuery = now
+                }
+                try {
+                    val packet = DatagramPacket(buffer, buffer.size)
+                    socket.receive(packet)
+                    Log.d("CAST_TEST", "mDNS packet received: ${packet.length} bytes from ${packet.address.hostAddress}")
+                    parseMdnsPacket(packet.data, packet.length, instances, srvRecords, addresses)
+                } catch (_: SocketTimeoutException) { }
+            }
+            Log.d("CAST_TEST", "mDNS discovery finished")
+            val results = linkedMapOf<String, CastDevice>()
+            for (instance in instances) {
+                val srv = srvRecords[instance]
+                val ip = srv?.let {
+                    addresses[it.target]
+                }
+                val friendlyName = instance.substringBefore("._googlecast._tcp").removeSuffix(".").ifBlank { "Chromecast" }
+                val device = if (!ip.isNullOrBlank()) {
+                    fetchDeviceDesc(ip)?.copy(ip = ip) ?: CastDevice(friendlyName = friendlyName, ip = ip)
+                } else {
+                    CastDevice(friendlyName = friendlyName, ip = "")
+                }
+                results[instance] = device
+                Log.d("CAST_TEST", "CHROMECAST FOUND: ${device.friendlyName} IP=${device.ip} PORT=${srv?.port ?: 0}")
+            }
+            results.values.sortedBy { it.friendlyName.lowercase() }
+        } catch (e: Exception) {
+            Log.e("CAST_TEST", "mDNS discovery error", e)
+            emptyList()
+        } finally {
+            runCatching {
+                socket?.close()
+            }
+            runCatching {
+                if (multicastLock.isHeld) {
+                    multicastLock.release()
+                }
+            }
+            Log.d("CAST_TEST", "mDNS socket closed")
+            Log.d("CAST_TEST", "MulticastLock released")
+        }
     }
 
+    private fun buildMdnsQuery(questions: Set<Pair<String, Int>>): ByteArray {
+        val output = java.io.ByteArrayOutputStream()
+        val data = java.io.DataOutputStream(output)
+        data.writeShort(0) // Transaction ID
+        data.writeShort(0) // Flags: standard query
+        data.writeShort(questions.size)
+        data.writeShort(0) // Answer count
+        data.writeShort(0) // Authority count
+        data.writeShort(0) // Additional count
+        for ((name, type) in questions) {
+            val cleanName = name.trimEnd('.')
+            for (label in cleanName.split('.')) {
+                val bytes = label.toByteArray(Charsets.UTF_8)
+                require(bytes.size <= 63)
+                data.writeByte(bytes.size)
+                data.write(bytes)
+            }
+            data.writeByte(0) // End of name
+            data.writeShort(type)
+            data.writeShort(1) // IN
+        }
+        return output.toByteArray()
+    }
+
+    private fun normalizeDnsName(name: String): String = name.trimEnd('.').lowercase() + "."
+
+    private fun readDnsU16(data: ByteArray, offset: Int): Int {
+        return ((data[offset].toInt() and 0xff) shl 8) or (data[offset + 1].toInt() and 0xff)
+    }
+
+    private fun readDnsName(data: ByteArray, start: Int): Pair<String, Int> {
+        val labels = mutableListOf<String>()
+        var offset = start
+        var nextOffset = -1
+        var jumps = 0
+        while (offset < data.size && jumps < 128) {
+            val length = data[offset].toInt() and 0xff
+            if (length == 0) {
+                if (nextOffset == -1) {
+                    nextOffset = offset + 1
+                }
+                break
+            }
+            // Compression pointer.
+            if ((length and 0xC0) == 0xC0) {
+                if (offset + 1 >= data.size) break
+                val pointer = ((length and 0x3F) shl 8) or (data[offset + 1].toInt() and 0xff)
+                if (nextOffset == -1) {
+                    nextOffset = offset + 2
+                }
+                if (pointer >= data.size) break
+                offset = pointer
+                jumps++
+                continue
+            }
+            if ((length and 0xC0) != 0 || offset + 1 + length > data.size) {
+                break
+            }
+            labels.add(String(data, offset + 1, length, Charsets.UTF_8))
+            offset += length + 1
+        }
+        return Pair(labels.joinToString(".") + ".", if (nextOffset >= 0) nextOffset else offset)
+    }
+
+    private fun parseMdnsPacket(data: ByteArray, length: Int, instances: MutableSet<String>, srvRecords: MutableMap<String, MdnsSrv>, addresses: MutableMap<String, String>) {
+        if (length < 12) return
+        val flags = readDnsU16(data, 2)
+        // Ignore queries; process responses only.
+        if ((flags and 0x8000) == 0) return
+        val questionCount = readDnsU16(data, 4)
+        val answerCount = readDnsU16(data, 6)
+        val authorityCount = readDnsU16(data, 8)
+        val additionalCount = readDnsU16(data, 10)
+        val totalRecords = answerCount + authorityCount + additionalCount
+        var offset = 12
+        // Skip questions.
+        repeat(questionCount) {
+            if (offset >= length) return
+            val result = readDnsName(data, offset)
+            offset = result.second
+            if (offset + 4 > length) return
+            offset += 4
+        }
+        repeat(totalRecords) {
+            if (offset >= length) return
+            val nameResult = readDnsName(data, offset)
+            val owner = normalizeDnsName(nameResult.first)
+            offset = nameResult.second
+            if (offset + 10 > length) return
+            val type = readDnsU16(data, offset)
+            val recordClass = readDnsU16(data, offset + 2)
+            val dataLength = readDnsU16(data, offset + 8)
+            val rdataOffset = offset + 10
+            val nextRecord = rdataOffset + dataLength
+            if (nextRecord > length) return
+            // Ignore non-IN records.
+            if ((recordClass and 0x7fff) == 1) {
+                when (type) {
+                    // PTR: service -> instance
+                    12 -> {
+                        val target = readDnsName(data, rdataOffset).first
+                        val normalizedTarget = normalizeDnsName(target)
+                        if (owner == normalizeDnsName(CAST_SERVICE)) {
+                            val added = instances.add(normalizedTarget)
+                            if (added) {
+                                Log.d("CAST_TEST", "PTR FOUND: $normalizedTarget")
+                            }
+                        }
+                    }
+                    // SRV: instance -> hostname + port
+                    33 -> {
+                        if (dataLength >= 7) {
+                            val port = readDnsU16(data, rdataOffset + 4)
+                            val target = readDnsName(data, rdataOffset + 6).first
+                            val normalizedOwner = normalizeDnsName(owner)
+                            val normalizedTarget = normalizeDnsName(target)
+                            srvRecords[normalizedOwner] = MdnsSrv(target = normalizedTarget, port = port)
+                            Log.d("CAST_TEST", "SRV FOUND: $normalizedOwner -> $normalizedTarget:$port")
+                        }
+                    }
+                    // A: hostname -> IPv4
+                    1 -> {
+                        if (dataLength == 4) {
+                            val ip = InetAddress.getByAddress(data.copyOfRange(rdataOffset,rdataOffset + 4)).hostAddress
+                            val normalizedOwner = normalizeDnsName(owner)
+                            addresses[normalizedOwner] = ip
+                            Log.d("CAST_TEST", "A RECORD: $normalizedOwner -> $ip")
+                        }
+                    }
+                }
+            }
+            offset = nextRecord
+        }
+    }
+
+    suspend fun searchDevices(context: Context, timeoutMs: Long = 8000L): List<CastDevice> {
+        return ssdpDiscover(context, timeoutMs)
+    }
 
     private fun fetchDeviceDesc(ip: String): CastDevice? {
         val ports = listOf(8008, 8009)
@@ -177,10 +348,10 @@ object CastUtils {
 
     private fun httpGet(url: String): String {
         val conn = (URL(url).openConnection() as HttpURLConnection).apply {
-            connectTimeout = 1200
-            readTimeout = 1200
+            connectTimeout = 3000
+            readTimeout = 3000
             requestMethod = "GET"
-            setRequestProperty("User-Agent", "curl/7.54.0")
+            setRequestProperty("User-Agent", USER_AGENT)
         }
 
         return conn.inputStream.bufferedReader().use { it.readText() }
@@ -332,7 +503,6 @@ object CastUtils {
             out.write(frame)
             out.flush()
 
-            // leer respuesta
             val buf = ByteArray(8192)
             val len = input.read(buf)
 
@@ -551,6 +721,7 @@ object CastUtils {
 
     fun getMediaPlayerState(session: CastSession): String? {
         val status = castGetStatus(session) ?: return null
+        Log.d("CAST_DEBUG", "status: $status")
         return status.optJSONArray("status")?.optJSONObject(0)?.optString("playerState")
     }
 

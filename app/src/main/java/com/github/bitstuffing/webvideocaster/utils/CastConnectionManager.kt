@@ -7,9 +7,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.*
 
-class CastConnectionManager(
-    private val session: CastSession
-) {
+class CastConnectionManager(private val session: CastSession) {
 
     private val TAG = "CAST_CONNECTION_MANAGER"
     private val socket = session.socket
@@ -26,7 +24,6 @@ class CastConnectionManager(
     @Volatile private var receiverReady = false
     @Volatile private var mediaReady = false
 
-    // estado interno (igual que Python globals)
     @Volatile private var player = false
     @Volatile private var mediaSessionId: Int? = session.mediaSessionId
     @Volatile private var transportId: String? = session.transportId
@@ -58,6 +55,7 @@ class CastConnectionManager(
             sendAppConnect(it)
             sendGetMediaStatus()
         }
+        startMediaUpdateLoop()
     }
 
     // -----------------------------
@@ -181,6 +179,25 @@ class CastConnectionManager(
         }
     }
 
+    fun getPlayerStateString(): String? {
+        return try {
+            CastUtils.getMediaPlayerState(session)?.also { state ->
+                playerState = when (state) {
+                    "PLAYING" -> CastPlayerState.PLAYING
+                    "PAUSED" -> CastPlayerState.PAUSED
+                    "BUFFERING" -> CastPlayerState.BUFFERING
+                    "IDLE" -> CastPlayerState.IDLE
+                    else -> CastPlayerState.UNKNOWN
+                }
+
+                Log.d(TAG, "Player state refreshed from Chromecast: $state")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Could not refresh player state", e)
+            null
+        }
+    }
+
     private fun launchMediaReceiver() {
         val payload = JSONObject().put("type", "LAUNCH").put("appId", "CC1AD845").put("requestId", requestId++)
         send(payload.toString(), "urn:x-cast:com.google.cast.receiver", "receiver-0")
@@ -239,11 +256,19 @@ class CastConnectionManager(
     private fun startMediaUpdateLoop() {
         mediaUpdateJob?.cancel()
         mediaUpdateJob = scope.launch {
-            while (player && running) {
-                delay(5000)
-                currentTime += 5.0
-                val status = generateMediaStatus(0, url, "PLAYING", currentTime)
-                sendResponse(status.toString(), "urn:x-cast:com.google.cast.media", transportId ?: "receiver-0")
+            log(TAG, "Starting media status update loop")
+            while (isActive && running) {
+                try {
+                    sendGetStatus()
+                    if (receiverReady && !transportId.isNullOrBlank()) {
+                        sendGetMediaStatus()
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    log(TAG, "Media status update error: ${e.message}")
+                }
+                delay(1000)
             }
         }
     }
