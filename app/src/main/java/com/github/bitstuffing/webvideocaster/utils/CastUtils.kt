@@ -719,6 +719,61 @@ object CastUtils {
         }
     }
 
+    fun getMediaPlayerInfo(session: CastSession): CastMediaInfo? {
+        val status = castGetStatus(session) ?: return null
+
+        return try {
+            val mediaStatus = status.optJSONArray("status")?.optJSONObject(0)?: return null
+            val media = mediaStatus.optJSONObject("media")
+            val videoInfo = mediaStatus.optJSONObject("videoInfo")
+            val state = when (mediaStatus.optString("playerState")) {
+                "PLAYING" -> CastConnectionManager.CastPlayerState.PLAYING
+                "PAUSED" -> CastConnectionManager.CastPlayerState.PAUSED
+                "BUFFERING" -> CastConnectionManager.CastPlayerState.BUFFERING
+                "IDLE" -> CastConnectionManager.CastPlayerState.IDLE
+                else -> CastConnectionManager.CastPlayerState.UNKNOWN
+            }
+            val tracks = media?.optJSONArray("tracks")
+            val audioTracks = mutableListOf<String>()
+            val subtitleTracks = mutableListOf<String>()
+            if (tracks != null) {
+                for (i in 0 until tracks.length()) {
+                    val track = tracks.optJSONObject(i) ?: continue
+                    when (track.optString("type")) {
+                        "AUDIO" -> audioTracks.add(
+                            track.optString("name")
+                        )
+                        "TEXT" -> subtitleTracks.add(
+                            track.optString("name")
+                        )
+                    }
+                }
+            }
+            val activeTracks = mutableListOf<Int>()
+            val activeTrackArray = mediaStatus.optJSONArray("activeTrackIds")
+            if (activeTrackArray != null) {
+                for (i in 0 until activeTrackArray.length()) {
+                    activeTracks.add(activeTrackArray.optInt(i))
+                }
+            }
+            CastMediaInfo(
+                playerState = state,
+                currentTime = mediaStatus.optDouble("currentTime", 0.0),
+                duration = media?.optDouble("duration", -1.0) ?: -1.0,
+                streamType = media?.optString("streamType"),
+                contentType = media?.optString("contentType"),
+                width = videoInfo?.optInt("width") ?: 0,
+                height = videoInfo?.optInt("height") ?: 0,
+                audioTracks = audioTracks,
+                subtitleTracks = subtitleTracks,
+                activeTrackIds = activeTracks
+            )
+        } catch (e: Exception) {
+            Log.e("CAST_DEBUG", "Error parsing media information", e)
+            null
+        }
+    }
+
     fun getMediaPlayerState(session: CastSession): String? {
         val status = castGetStatus(session) ?: return null
         Log.d("CAST_DEBUG", "status: $status")

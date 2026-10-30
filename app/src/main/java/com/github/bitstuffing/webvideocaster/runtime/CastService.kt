@@ -1,3 +1,4 @@
+
 package com.github.bitstuffing.webvideocaster.runtime
 
 import android.app.Notification
@@ -10,40 +11,74 @@ import android.os.Binder
 import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.media.app.NotificationCompat.MediaStyle
+import android.support.v4.media.MediaMetadataCompat
+import android.support.v4.media.session.MediaSessionCompat
+import android.support.v4.media.session.PlaybackStateCompat
 import com.github.bitstuffing.webvideocaster.R
 import com.github.bitstuffing.webvideocaster.utils.CastConnectionManager
+import com.github.bitstuffing.webvideocaster.utils.CastMediaInfo
 import com.github.bitstuffing.webvideocaster.utils.CastSession
 import kotlinx.coroutines.*
 import com.github.bitstuffing.webvideocaster.utils.CastDevice
 import com.github.bitstuffing.webvideocaster.utils.CastUtils
-import java.net.SocketTimeoutException
 
 class CastService : Service() {
 
-    private val binder = LocalBinder()
     private var discoveryJob: Job? = null
+
+    companion object {
+        private const val TAG = "CAST_SERVICE"
+
+        private const val NOTIFICATION_ID = 1
+        private const val CHANNEL_ID = "cast_service"
+
+        const val ACTION_PLAY = "cast_play"
+        const val ACTION_PAUSE = "cast_pause"
+        const val ACTION_STOP = "cast_stop"
+    }
+
+    fun monitorDevice(device: CastDevice) {
+        discoveryJob?.cancel()
+        discoveryJob = serviceScope.launch {
+            while (isActive) {
+                val currentSession = session
+                if (currentSession == null || !currentSession.socket.isConnected || currentSession.socket.isClosed) {
+                    try {
+                        val recovered = withContext(Dispatchers.IO) {
+                            CastUtils.getSession(device)
+                        }
+                        if (recovered != null) {
+                            withContext(Dispatchers.Main.immediate) {
+                                attachSession(recovered, "")
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Session recovery failed", e)
+                    }
+                }
+                delay(2000)
+            }
+        }
+    }
 
     inner class LocalBinder : Binder() {
         fun getService(): CastService = this@CastService
     }
 
-    override fun onBind(intent: Intent?): IBinder {
-        Log.d("CAST_SERVICE", "onBind CALLED")
-        return binder
-    }
+    private val binder = LocalBinder()
 
-    // ----------------------------
-    // CORE
-    // ----------------------------
+    private val serviceScope =
+        CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    private var statusJob: Job? = null
+
     private var manager: CastConnectionManager? = null
     private var session: CastSession? = null
 
-    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private var statusJob: Job? = null
+    @Volatile
+    private var mediaInfo: CastMediaInfo? = null
 
-    // ----------------------------
-    // NOTIFICATION STATE
-    // ----------------------------
     @Volatile
     private var isPlaying = false
 
@@ -53,192 +88,173 @@ class CastService : Service() {
     @Volatile
     private var playerState = CastConnectionManager.CastPlayerState.UNKNOWN
 
-    private var lastMediaSessionId: Int? = null
+    @Volatile
+    private var receiverName: String? = null
 
-    private val channelId = "cast_service"
+    private var lastNotificationKey: String? = null
 
-    companion object {
-        private const val ACTION_PLAY = "cast_play"
-        private const val ACTION_PAUSE = "cast_pause"
-    }
+    private lateinit var mediaSession: MediaSessionCompat
+
+    private var mediaSessionInitialized = false
 
     override fun onCreate() {
         super.onCreate()
-        Log.d("CAST_SERVICE", "Service created")
         createNotificationChannel()
+        createMediaSession()
+        Log.d(TAG, "Service created")
     }
 
-    fun monitorDevice(device: CastDevice) {
-        Log.d("CAST_SERVICE", "Starting monitor for ${device.friendlyName}")
-        startMonitoring(device)
-    }
-
-    private fun startMonitoring(device: CastDevice) {
-        statusJob?.cancel()
-        statusJob = serviceScope.launch {
-            Log.d("CAST_SERVICE", "Monitor started for ${device.friendlyName}")
-            while (isActive) {
-                try {
-                    var currentSession = session
-                    var newPlayerState: String? = null
-                    do {
-                        // 1. Recover an existing session if necessary
-                        if (currentSession == null || !currentSession.socket.isConnected || currentSession.socket.isClosed) {
-                            Log.d("CAST_SERVICE", "Inspecting existing Cast session...")
-                            val newSession = withContext(Dispatchers.IO) {
-                                CastUtils.getSession(device)
-                            }
-                            if (newSession == null) {
-                                Log.d("CAST_SERVICE", "No active Cast session available")
-                                delay(2000)
-                                continue
-                            }
-                            Log.d("CAST_SERVICE", "Session recovered: transport=${newSession.transportId}, media=${newSession.mediaSessionId}")
-                            // Replace previous session and manager
-                            manager?.close()
-                            session = newSession
-                            currentSession = newSession
-                            manager = CastConnectionManager(newSession)
-                            lastMediaSessionId = newSession.mediaSessionId
-                            playerState = CastConnectionManager.CastPlayerState.UNKNOWN
-                        }
-                        try {
-                            // 2. Retrieve player state using the existing session
-                            newPlayerState = manager?.getPlayerStateString()
-                        }catch (e: SocketTimeoutException){
-                            Log.e("CAST_SERVICE", "Error retrieving player state, forcing retry", e)
-                        }
-                        Log.d("CAST_SERVICE","Player state received: $newPlayerState")
-                        if (newPlayerState == null) {
-                            currentSession = null
-                        }
-                    }while (newPlayerState == null)
-                    // 3. Update playback state
-                    var changed = false
-                    when (newPlayerState) {
-                        "PLAYING" -> {
-                            if (!isPlaying || !hasMedia) {
-                                isPlaying = true
-                                hasMedia = true
-                                changed = true
-                            }
-                        }
-                        "PAUSED" -> {
-                            if (isPlaying || !hasMedia) {
-                                isPlaying = false
-                                hasMedia = true
-                                changed = true
-                            }
-                        }
-                        "IDLE" -> {
-                            if (isPlaying || hasMedia) {
-                                isPlaying = false
-                                hasMedia = false
-                                changed = true
-                            }
-                        }
-                        null -> {
-                            Log.d(
-                                "CAST_SERVICE",
-                                "Unable to retrieve player state"
-                            )
-                        }
-                        else -> {
-                            Log.d(
-                                "CAST_SERVICE",
-                                "Unknown player state: $newPlayerState"
-                            )
-                        }
-                    }
-
-                    // 4. Update notification only when necessary
-                    if (changed) {
-                        Log.d("CAST_SERVICE", "Updating notification: playing=$isPlaying, hasMedia=$hasMedia")
-                        updateNotification()
-                    }
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    Log.e("CAST_SERVICE", "Error monitoring Cast playback", e)
-                }
-                delay(2000)
-            }
-        }
+    override fun onBind(intent: Intent?): IBinder {
+        return binder
     }
 
     // --------------------------------------------------
-    // ATTACH SESSION
+    // ATTACH CAST SESSION
     // --------------------------------------------------
     fun attachSession(session: CastSession, url: String) {
-        Log.d("CAST_SERVICE", "attachSession()")
-        discoveryJob?.cancel()
-        discoveryJob = null
+        Log.d(TAG, "Attaching Cast session")
         statusJob?.cancel()
         manager?.close()
         this.session = session
         this.manager = CastConnectionManager(session)
-        lastMediaSessionId = null
-        playerState = CastConnectionManager.CastPlayerState.UNKNOWN
-        hasMedia = false
+        mediaInfo = null
+        receiverName = null
         isPlaying = false
-        startForeground(1, buildNotification())
+        hasMedia = false
+        playerState = CastConnectionManager.CastPlayerState.UNKNOWN
+        lastNotificationKey = null
+        mediaSession.isActive = true
+        discoveryJob?.cancel()
+        discoveryJob = null
+        startForeground(NOTIFICATION_ID,buildNotification())
         startStatusLoop()
+    }
+
+    private fun createMediaSession() {
+        mediaSession = MediaSessionCompat(this, "WebVideoCaster")
+        mediaSession.setFlags(MediaSessionCompat.FLAG_HANDLES_MEDIA_BUTTONS or MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS)
+        mediaSession.setCallback(object : MediaSessionCompat.Callback() {
+                override fun onPlay() {
+                    play()
+                }
+                override fun onPause() {
+                    pause()
+                }
+                override fun onStop() {
+                    stopCasting()
+                }
+            }
+        )
+        mediaSessionInitialized = true
+        Log.d(TAG, "MediaSession created")
     }
 
     private fun startStatusLoop() {
         statusJob?.cancel()
         statusJob = serviceScope.launch {
-            Log.d("CAST_SERVICE", "Status monitoring started")
+            Log.d(TAG, "Status monitoring started")
             while (isActive) {
                 try {
-                    val m = manager
-                    if (m == null) {
+                    val currentManager = manager
+                    if (currentManager == null) {
                         delay(1000)
                         continue
                     }
-                    val mediaId = m.getMediaSessionId()
-                    val state = m.getPlayerState()
-                    if (state == CastConnectionManager.CastPlayerState.UNKNOWN) {
+                    val info = currentManager.getMediaInfo()
+                    if (info == null) {
                         delay(500)
                         continue
                     }
-                    val newHasMedia = mediaId != null && state != CastConnectionManager.CastPlayerState.IDLE
-                    val newIsPlaying = newHasMedia && state == CastConnectionManager.CastPlayerState.PLAYING
-                    val changed = mediaId != lastMediaSessionId || state != playerState || newHasMedia != hasMedia || newIsPlaying != isPlaying
-                    if (changed) {
-                        lastMediaSessionId = mediaId
-                        playerState = state
-                        hasMedia = newHasMedia
-                        isPlaying = newIsPlaying
-
-                        Log.d("CAST_SERVICE", "State changed: state=$state, hasMedia=$hasMedia, playing=$isPlaying")
-                        withContext(Dispatchers.Main.immediate) {
+                    val newHasMedia = info.playerState != CastConnectionManager.CastPlayerState.IDLE && info.playerState != CastConnectionManager.CastPlayerState.UNKNOWN
+                    val newIsPlaying = newHasMedia && info.playerState == CastConnectionManager.CastPlayerState.PLAYING
+                    val newReceiverName = currentManager.getReceiverName()
+                    mediaInfo = info
+                    playerState = info.playerState
+                    hasMedia = newHasMedia
+                    isPlaying = newIsPlaying
+                    receiverName = newReceiverName
+                    val notificationKey = listOf(
+                        info.playerState,
+                        info.title,
+                        info.subtitle,
+                        info.artist,
+                        info.imageUrl,
+                        info.isLive,
+                        info.resolution,
+                        newReceiverName,
+                        currentManager.getMediaSessionId()
+                    ).joinToString("|")
+                    withContext(Dispatchers.Main.immediate) {
+                        updateMediaSession()
+                        if (notificationKey != lastNotificationKey) {
+                            lastNotificationKey = notificationKey
                             updateNotification()
                         }
                     }
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    Log.e("CAST_SERVICE", "Status loop error", e)
+                    Log.e(TAG, "Status monitoring error",e)
                 }
                 delay(1000)
             }
         }
     }
 
+    private fun updateMediaSession() {
+        val info = mediaInfo
+        if (info == null) return
+        val title = info.title?: receiverName?: getString(R.string.notification_title)
+        val artist = info.artist?: info.subtitle?: "Chromecast"
+        val metadata = MediaMetadataCompat.Builder()
+            .putString(MediaMetadataCompat.METADATA_KEY_TITLE,title)
+            .putString(MediaMetadataCompat.METADATA_KEY_ARTIST,artist)
+        if (info.duration > 0 && !info.isLive) {
+            metadata.putLong(MediaMetadataCompat.METADATA_KEY_DURATION, (info.duration * 1000).toLong())
+        }
+        mediaSession.setMetadata(metadata.build())
+        val actions = PlaybackStateCompat.ACTION_PLAY or PlaybackStateCompat.ACTION_PAUSE or PlaybackStateCompat.ACTION_PLAY_PAUSE or PlaybackStateCompat.ACTION_STOP
+        val state = when (info.playerState) {
+            CastConnectionManager.CastPlayerState.PLAYING -> PlaybackStateCompat.STATE_PLAYING
+            CastConnectionManager.CastPlayerState.PAUSED -> PlaybackStateCompat.STATE_PAUSED
+            CastConnectionManager.CastPlayerState.BUFFERING -> PlaybackStateCompat.STATE_BUFFERING
+            CastConnectionManager.CastPlayerState.IDLE -> PlaybackStateCompat.STATE_STOPPED
+            else -> PlaybackStateCompat.STATE_NONE
+        }
+        mediaSession.setPlaybackState(PlaybackStateCompat.Builder().setActions(actions).setState(state,
+                if (info.currentTime >= 0) {
+                    (info.currentTime * 1000).toLong()
+                } else {
+                    PlaybackStateCompat.PLAYBACK_POSITION_UNKNOWN
+                },
+                if (state == PlaybackStateCompat.STATE_PLAYING) {
+                    1f
+                } else {
+                    0f
+                }
+            ).build()
+        )
+    }
+
     // --------------------------------------------------
     // CONTROLS
     // --------------------------------------------------
     fun play() {
+        if (!hasMedia) return
+        Log.d(TAG, "Play requested")
         manager?.play()
-        isPlaying = true
-        updateNotification()
     }
 
     fun pause() {
+        if (!hasMedia) return
+        Log.d(TAG, "Pause requested")
         manager?.pause()
+    }
+
+    fun stopCasting() {
+        Log.d(TAG, "Stop requested")
+        manager?.stop()
         isPlaying = false
-        updateNotification()
     }
 
     // --------------------------------------------------
@@ -246,56 +262,82 @@ class CastService : Service() {
     // --------------------------------------------------
     private fun buildNotification(): Notification {
 
+        val info = mediaInfo
+        val title = info?.title?: receiverName?: getString(R.string.notification_title)
         val statusText = when {
             !hasMedia -> getString(R.string.notification_no_media)
+            info?.isLive == true -> "LIVE"
             isPlaying -> getString(R.string.notification_playing)
+            playerState == CastConnectionManager.CastPlayerState.BUFFERING -> "Buffering..."
             else -> getString(R.string.notification_paused)
         }
+        val details = buildList {
+            add(statusText)
+            info?.resolution?.let {
+                add(it)
+            }
+            info?.subtitle?.let {
+                add(it)
+            }
+        }.joinToString(" · ")
 
         val playPauseAction = if (isPlaying) {
             NotificationCompat.Action(android.R.drawable.ic_media_pause, getString(R.string.pause), actionIntent(ACTION_PAUSE))
         } else {
             NotificationCompat.Action(android.R.drawable.ic_media_play, getString(R.string.play), actionIntent(ACTION_PLAY))
         }
-
-        return NotificationCompat.Builder(this, channelId)
-            .setContentTitle(getString(R.string.notification_title))
-            .setContentText(statusText)
+        val stopAction = NotificationCompat.Action(android.R.drawable.ic_menu_close_clear_cancel, "Stop", actionIntent(ACTION_STOP))
+        return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_media_play)
+            .setContentTitle(title)
+            .setContentText(details)
+            .setSubText(receiverName)
+            .setCategory(NotificationCompat.CATEGORY_TRANSPORT)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setOnlyAlertOnce(true)
+            .setOngoing(hasMedia)
+            .setShowWhen(false)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
             .addAction(playPauseAction)
-            .setOngoing(true)
-            .build()
+            .addAction(stopAction)
+            .setStyle(MediaStyle().setMediaSession(mediaSession.sessionToken).setShowActionsInCompactView(0, 1)
+        ).build()
     }
 
     private fun updateNotification() {
         val notification = buildNotification()
-        getSystemService(NotificationManager::class.java).notify(1, notification)
+        if (hasMedia) {
+            startForeground(NOTIFICATION_ID, notification)
+        } else {
+            getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification)
+        }
     }
 
-    // --------------------------------------------------
-    // ACTION HANDLING
-    // --------------------------------------------------
+    private fun actionIntent(action: String): PendingIntent {
+        val intent = Intent(this, CastService::class.java
+        ).apply {
+            this.action = action
+        }
+
+        return PendingIntent.getService(this, action.hashCode(), intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+    }
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_PLAY -> play()
             ACTION_PAUSE -> pause()
+            ACTION_STOP -> stopCasting()
         }
         return START_STICKY
-    }
-
-    private fun actionIntent(action: String): PendingIntent {
-        val intent = Intent(this, CastService::class.java).apply {
-            this.action = action
-        }
-        return PendingIntent.getService(this,action.hashCode(),intent,PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
     }
 
     // --------------------------------------------------
     // CHANNEL
     // --------------------------------------------------
     private fun createNotificationChannel() {
-        val channel = NotificationChannel(channelId,getString(R.string.cast_service_channel_name),NotificationManager.IMPORTANCE_LOW)
+        val channel = NotificationChannel(CHANNEL_ID, getString(R.string.cast_service_channel_name), NotificationManager.IMPORTANCE_LOW).apply {
+            description = "Chromecast media controls"
+            setShowBadge(false)
+        }
         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
     }
 
@@ -303,10 +345,18 @@ class CastService : Service() {
     // CLEANUP
     // --------------------------------------------------
     override fun onDestroy() {
-        discoveryJob?.cancel()
+        Log.d(TAG, "Service destroying")
         statusJob?.cancel()
         serviceScope.cancel()
         manager?.close()
+        manager = null
+        session = null
+        if (mediaSessionInitialized) {
+            mediaSession.isActive = false
+            mediaSession.release()
+        }
+        discoveryJob?.cancel()
+        stopForeground(STOP_FOREGROUND_REMOVE)
         super.onDestroy()
     }
 }

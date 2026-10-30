@@ -30,6 +30,11 @@ class CastConnectionManager(private val session: CastSession) {
     @Volatile private var url: String? = null
     @Volatile private var currentTime: Double = 0.0
     private var mediaUpdateJob: Job? = null
+    @Volatile private var mediaInfo: CastMediaInfo? = null
+    @Volatile private var receiverName: String? = null
+
+    fun getMediaInfo(): CastMediaInfo? = mediaInfo
+    fun getReceiverName(): String? = receiverName
 
     enum class CastPlayerState {
         UNKNOWN,
@@ -117,6 +122,7 @@ class CastConnectionManager(private val session: CastSession) {
             }
             "RECEIVER_STATUS" -> {
                 val app = json.optJSONObject("status")?.optJSONArray("applications")?.optJSONObject(0)
+                receiverName = app?.optString("displayName")?.takeIf { it.isNotBlank() }
 
                 val newTransportId = app?.optString("transportId")
 
@@ -138,6 +144,7 @@ class CastConnectionManager(private val session: CastSession) {
                     session.mediaSessionId = null
                     mediaReady = false
                     playerState = CastPlayerState.IDLE
+                    mediaInfo = null
                     log(TAG, "MEDIA_STATUS: no active media")
                     return
                 }
@@ -158,7 +165,64 @@ class CastConnectionManager(private val session: CastSession) {
                     "IDLE" -> CastPlayerState.IDLE
                     else -> CastPlayerState.UNKNOWN
                 }
-                log(TAG, "MEDIA_STATUS: state=$playerState, mediaSessionId=$mediaSessionId")
+
+                val media = status.optJSONObject("media")
+                val metadata = media?.optJSONObject("metadata")
+                val videoInfo = status.optJSONObject("videoInfo")
+                val volume = status.optJSONObject("volume")
+
+                val audioTracks = mutableListOf<String>()
+                val subtitleTracks = mutableListOf<String>()
+                val activeTrackIds = mutableListOf<Int>()
+
+                val tracks = media?.optJSONArray("tracks")
+
+                if (tracks != null) {
+                    for (i in 0 until tracks.length()) {
+                        val track = tracks.optJSONObject(i) ?: continue
+
+                        when (track.optString("type")) {
+                            "AUDIO" -> {
+                                audioTracks.add(track.optString("name"))
+                            }
+                            "TEXT" -> {
+                                subtitleTracks.add(track.optString("name"))
+                            }
+                        }
+                    }
+                }
+
+                val activeArray = status.optJSONArray("activeTrackIds")
+
+                if (activeArray != null) {
+                    for (i in 0 until activeArray.length()) {
+                        activeTrackIds.add(activeArray.optInt(i))
+                    }
+                }
+
+                val images = metadata?.optJSONArray("images")
+
+                val imageUrl = images?.optJSONObject(0)?.optString("url")?.takeIf { it.isNotBlank() }
+
+                mediaInfo = CastMediaInfo(
+                    playerState = playerState,
+                    currentTime = status.optDouble("currentTime", 0.0),
+                    duration = media?.optDouble("duration", -1.0) ?: -1.0,
+                    streamType = media?.optString("streamType"),
+                    contentType = media?.optString("contentType"),
+                    title = metadata?.optString("title")?.takeIf { it.isNotBlank() },
+                    subtitle = metadata?.optString("subtitle")?.takeIf { it.isNotBlank() },
+                    artist = metadata?.optString("artist")?.takeIf { it.isNotBlank() },
+                    imageUrl = imageUrl,
+                    width = videoInfo?.optInt("width") ?: 0,
+                    height = videoInfo?.optInt("height") ?: 0,
+                    audioTracks = audioTracks,
+                    subtitleTracks = subtitleTracks,
+                    activeTrackIds = activeTrackIds,
+                    volume = volume?.optDouble("level", 1.0) ?: 1.0,
+                    isMuted = volume?.optBoolean("muted", false) ?: false
+                )
+                log(TAG,"MEDIA_STATUS: state=$playerState, mediaSessionId=$mediaSessionId, live=${mediaInfo?.isLive}, resolution=${mediaInfo?.resolution}")
             }
             "SEEK" -> {
                 val ct = json.optDouble("currentTime", 0.0)
