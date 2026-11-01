@@ -1,9 +1,15 @@
-name: Build Android APK
+name: Build Android APK and Chromecast library
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main", "develop"]
+    tags: ["v*"]
+  pull_request:
+    branches: ["main", "develop"]
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   build:
@@ -23,11 +29,24 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x ./gradlew
 
-      - name: Build debug APK
-        run: ./gradlew assembleDebug
+      - name: Run Chromecast unit tests
+        run: ./gradlew :chromecast:testDebugUnitTest --no-daemon
+
+      - name: Build debug APK and release AAR
+        run: ./gradlew :app:assembleDebug :chromecast:assembleRelease --no-daemon
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: app-debug-apk
           path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload Chromecast AAR artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: chromecast-release-aar
+          path: chromecast/build/outputs/aar/*-release.aar
+          if-no-files-found: error
+          retention-days: 14
