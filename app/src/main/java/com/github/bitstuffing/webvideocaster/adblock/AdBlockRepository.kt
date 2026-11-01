@@ -2,7 +2,7 @@ package com.github.bitstuffing.webvideocaster.adblock
 
 import android.content.Context
 import android.util.Log
-import com.github.bitstuffing.webvideocaster.utils.USER_AGENT
+import com.github.bitstuffing.webvideocaster.chromecast.utils.USER_AGENT
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.net.HttpURLConnection

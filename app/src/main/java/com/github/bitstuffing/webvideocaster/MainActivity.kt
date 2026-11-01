@@ -32,10 +32,10 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.content.ContextCompat
-import com.github.bitstuffing.webvideocaster.runtime.CastService
+import com.github.bitstuffing.webvideocaster.chromecast.runtime.CastService
 import com.github.bitstuffing.webvideocaster.ui.theme.WebVideoCasterTheme
-import com.github.bitstuffing.webvideocaster.utils.USER_AGENT
-import com.github.bitstuffing.webvideocaster.utils.isMediaUrl
+import com.github.bitstuffing.webvideocaster.chromecast.utils.USER_AGENT
+import com.github.bitstuffing.webvideocaster.chromecast.utils.isMediaUrl
 import androidx.lifecycle.lifecycleScope
 import com.github.bitstuffing.webvideocaster.adblock.AdBlocker
 import com.github.bitstuffing.webvideocaster.adblock.AdBlockRepository

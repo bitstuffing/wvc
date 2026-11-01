@@ -38,7 +38,7 @@
         </activity>
 
         <service
-            android:name=".runtime.CastService"
+            android:name=".chromecast.runtime.CastService"
             android:exported="false"
             android:foregroundServiceType="mediaPlayback" />
 

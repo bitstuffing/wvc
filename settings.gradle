@@ -24,3 +24,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "Web Video Caster"
 include ':app'
+include ':chromecast'

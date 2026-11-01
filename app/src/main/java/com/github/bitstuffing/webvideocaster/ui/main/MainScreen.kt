@@ -20,10 +20,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import com.github.bitstuffing.webvideocaster.R
-import com.github.bitstuffing.webvideocaster.runtime.CastService
-import com.github.bitstuffing.webvideocaster.utils.CastDevice
-import com.github.bitstuffing.webvideocaster.utils.CastUtils
-import com.github.bitstuffing.webvideocaster.utils.openWithVlc
+import com.github.bitstuffing.webvideocaster.chromecast.runtime.CastService
+import com.github.bitstuffing.webvideocaster.chromecast.utils.CastDevice
+import com.github.bitstuffing.webvideocaster.chromecast.utils.CastUtils
+import com.github.bitstuffing.webvideocaster.chromecast.utils.openWithVlc
 import kotlinx.coroutines.launch
 
 @SuppressLint("LocalContextGetResourceValueCall")
@@ -69,7 +69,7 @@ fun MainScreen(
                         scope.launch {
                             val lock = CastUtils.acquireMulticastLock(context)
                             try {
-                                devices = CastUtils.searchDevices(context, 8000L)
+                                devices = CastUtils.searchDevices(context, 4000L)
                             } catch (e: Exception) {
                                 Log.e("CAST_MAIN","Error seeking Cast device",e)
                                 devices = emptyList()

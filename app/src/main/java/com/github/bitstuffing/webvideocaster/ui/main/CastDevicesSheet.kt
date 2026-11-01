@@ -17,7 +17,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.github.bitstuffing.webvideocaster.R
-import com.github.bitstuffing.webvideocaster.utils.CastDevice
+import com.github.bitstuffing.webvideocaster.chromecast.utils.CastDevice
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
