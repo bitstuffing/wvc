@@ -1,0 +1,44 @@
+name: Build Chromecast Android library
+
+on:
+  push:
+    branches:
+      - develop
+    tags:
+      - "v*"
+  pull_request:
+    branches:
+      - develop
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-library:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Java
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Make Gradle wrapper executable
+        run: chmod +x ./gradlew
+
+      - name: Build library
+        run: ./gradlew :wvc-core:test :wvc-core:assembleRelease --no-daemon
+
+      - name: Upload AAR
+        uses: actions/upload-artifact@v4
+        with:
+          name: wvc-core-release
+          path: wvc-core/build/outputs/aar/*-release.aar
+          if-no-files-found: error
+          retention-days: 14
